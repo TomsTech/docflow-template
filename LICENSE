@@ -1,21 +1,100 @@
-MIT License
+DocFlow Proprietary License
 
-Copyright (c) 2024 {{OWNER}}
+Copyright (c) 2024-2025 Tom Mangano (TomsTech). All Rights Reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+TERMS AND CONDITIONS
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. DEFINITIONS
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   "Software" refers to DocFlow and all associated documentation, templates,
+   workflows, configuration files, and source code contained in this repository.
+
+   "Personal Use" means use by an individual for non-commercial purposes,
+   including personal projects, learning, and evaluation.
+
+   "Commercial Use" means any use intended for or directed toward commercial
+   advantage or monetary compensation, including but not limited to:
+   - Use within a business or organisation
+   - Use to provide services to clients
+   - Integration into commercial products
+   - Use by government or educational institutions
+
+   "Licensor" refers to Tom Mangano (TomsTech).
+
+2. GRANT OF LICENSE
+
+   2.1 Personal Use License (Free)
+       Subject to the terms of this license, you are granted a limited,
+       non-exclusive, non-transferable, revocable license to use the Software
+       for Personal Use only, provided that:
+       - You retain all copyright and attribution notices
+       - You do not remove or alter any license information
+       - You do not sublicense, sell, or redistribute the Software
+
+   2.2 Commercial Use License (Paid)
+       Commercial Use of this Software requires a separate commercial license
+       agreement with the Licensor. All royalties and licensing fees for
+       Commercial Use are payable directly to Tom Mangano (TomsTech).
+
+       To obtain a commercial license, contact: [INSERT CONTACT EMAIL]
+
+3. RESTRICTIONS
+
+   You may NOT:
+   - Use the Software for Commercial Use without a paid license
+   - Distribute, sublicense, lease, or sell the Software
+   - Remove or modify any proprietary notices or labels
+   - Use the Software to create derivative works for distribution
+   - Reverse engineer, decompile, or disassemble the Software
+   - Use the Licensor's name, trademarks, or branding without permission
+
+4. ROYALTIES AND PAYMENTS
+
+   All Commercial Use requires payment of royalties or licensing fees as
+   determined by the Licensor. Revenue generated through Commercial Use of
+   this Software without a valid commercial license constitutes infringement
+   and the Licensor is entitled to all such revenue plus damages.
+
+5. INTELLECTUAL PROPERTY
+
+   The Software and all copies thereof are proprietary to the Licensor and
+   title thereto remains exclusively with the Licensor. All rights in the
+   Software not specifically granted in this license are reserved to the
+   Licensor.
+
+6. DISCLAIMER OF WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. THE LICENSOR DOES
+   NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE OR UNINTERRUPTED.
+
+7. LIMITATION OF LIABILITY
+
+   IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
+   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR IN
+   CONNECTION WITH THIS LICENSE OR THE USE OF THE SOFTWARE.
+
+8. TERMINATION
+
+   This license is effective until terminated. Your rights under this license
+   will terminate automatically without notice if you fail to comply with any
+   of its terms. Upon termination, you must destroy all copies of the Software.
+
+9. GOVERNING LAW
+
+   This license shall be governed by and construed in accordance with the
+   laws of Queensland, Australia, without regard to its conflict of law
+   provisions.
+
+10. ENTIRE AGREEMENT
+
+    This license constitutes the entire agreement between you and the Licensor
+    relating to the Software and supersedes all prior or contemporaneous
+    understandings regarding such subject matter.
+
+---
+
+For commercial licensing enquiries, contact Tom Mangano at TomsTech.
+
+(c) 2024-2025 Tom Mangano. All Rights Reserved.
