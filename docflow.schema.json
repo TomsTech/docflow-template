@@ -1,0 +1,609 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/TomsTech/docflow-template/main/docflow.schema.json",
+  "title": "DocFlow Configuration",
+  "description": "Configuration schema for DocFlow - Enterprise Documentation & CI/CD Template System",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "DocFlow config version (semver)",
+      "default": "1.0.0"
+    },
+    "project": {
+      "type": "object",
+      "description": "Project metadata",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "description": "Project description"
+        },
+        "type": {
+          "type": "string",
+          "description": "Project type for auto-detection",
+          "enum": ["auto", "node", "python", "dotnet", "java", "go", "rust", "powershell", "ruby", "php", "generic"],
+          "default": "auto"
+        },
+        "language": {
+          "type": "string",
+          "description": "Documentation language/locale",
+          "enum": ["Australian English", "British English", "American English"],
+          "default": "Australian English"
+        },
+        "owner": {
+          "type": "string",
+          "description": "GitHub owner/organisation"
+        },
+        "repository": {
+          "type": "string",
+          "description": "GitHub repository name"
+        }
+      },
+      "required": ["name"]
+    },
+    "branding": {
+      "type": "object",
+      "description": "Brand colour palette (hex codes)",
+      "properties": {
+        "primary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "secondary": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "accent": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "background": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "success": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "warning": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "error": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+      }
+    },
+    "folders": {
+      "type": "object",
+      "description": "Folder structure requirements",
+      "properties": {
+        "enforce": {
+          "type": "boolean",
+          "description": "Enforce folder structure in CI",
+          "default": true
+        },
+        "required": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required folders (fail if missing)"
+        },
+        "optional": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional folders (created if scaffold enabled)"
+        }
+      }
+    },
+    "readme": {
+      "type": "object",
+      "description": "README.md generation settings",
+      "properties": {
+        "generate": {
+          "type": "boolean",
+          "default": true
+        },
+        "template": {
+          "type": "string",
+          "enum": ["default", "minimal", "enterprise", "custom"],
+          "default": "default"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["badges", "overview", "architecture", "installation", "usage", "api", "testing", "deployment", "contributing", "license"]
+          }
+        },
+        "badges": {
+          "type": "object",
+          "properties": {
+            "workflow": { "type": "boolean" },
+            "version": { "type": "boolean" },
+            "coverage": { "type": "boolean" },
+            "security": { "type": "boolean" },
+            "documentation": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "diagrams": {
+      "type": "object",
+      "description": "Diagram generation settings",
+      "properties": {
+        "mermaid": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "theme": { "type": "string", "enum": ["default", "dark", "forest", "neutral"], "default": "default" }
+          }
+        },
+        "erd": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "sources": { "type": "array", "items": { "type": "string" } },
+            "output": { "type": "string" }
+          }
+        },
+        "architecture": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "depth": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "exclude": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "flow": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "sources": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "state": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "sources": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "documentation": {
+      "type": "object",
+      "description": "Documentation output settings",
+      "properties": {
+        "output": {
+          "type": "object",
+          "properties": {
+            "directory": { "type": "string" },
+            "formats": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["markdown", "pdf", "docx", "html"] }
+            },
+            "indexFile": { "type": "string" }
+          }
+        },
+        "dataDictionary": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "output": { "type": "string" }
+          }
+        },
+        "apiReference": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "openApiSpec": { "type": "string" },
+            "output": { "type": "string" }
+          }
+        },
+        "changelog": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "conventionalCommits": { "type": "boolean" },
+            "file": { "type": "string" }
+          }
+        },
+        "asBuilt": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "output": { "type": "string" }
+          }
+        }
+      }
+    },
+    "templates": {
+      "type": "object",
+      "description": "Documentation template settings",
+      "properties": {
+        "scaffold": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "onInit": { "type": "boolean" },
+            "structure": { "type": "object" }
+          }
+        },
+        "adr": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "prefix": { "type": "string" },
+            "autoNumber": { "type": "boolean" }
+          }
+        },
+        "runbooks": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "prefix": { "type": "string" },
+            "autoNumber": { "type": "boolean" },
+            "categories": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["incident", "deployment", "maintenance", "recovery", "security", "monitoring"] }
+            }
+          }
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "linkToAdr": { "type": "boolean" }
+          }
+        },
+        "api": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "groupBy": { "type": "string", "enum": ["resource", "method", "tag"] }
+          }
+        },
+        "database": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "autoGenerate": {
+              "type": "object",
+              "properties": {
+                "fromPrisma": { "type": "boolean" },
+                "fromEntity": { "type": "boolean" },
+                "fromSql": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "architecture": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "diagrams": {
+              "type": "object",
+              "properties": {
+                "format": { "type": "string", "enum": ["ascii", "mermaid", "plantuml"] },
+                "c4Model": { "type": "boolean" },
+                "dataFlow": { "type": "boolean" },
+                "deployment": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "security": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "sections": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["threatModel", "authentication", "authorisation", "dataProtection", "compliance", "incidentResponse", "securityTesting"] }
+            }
+          }
+        },
+        "deployment": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "directory": { "type": "string" },
+            "template": { "type": "string" },
+            "environments": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "variables": {
+          "type": "object",
+          "description": "Template variable substitutions",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "description": "AI assistant configuration",
+      "properties": {
+        "claudeMd": {
+          "type": "object",
+          "properties": {
+            "generate": { "type": "boolean" },
+            "autoUpdate": { "type": "boolean" },
+            "sections": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["projectOverview", "folderStructure", "techStack", "namingConventions", "commonCommands", "dataModel", "keyFiles", "codebaseContext"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "description": "Security scanning configuration",
+      "properties": {
+        "owaspZap": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "targetUrl": { "type": "string" },
+            "scanTypes": {
+              "type": "object",
+              "properties": {
+                "baseline": {
+                  "type": "object",
+                  "properties": {
+                    "trigger": { "type": "string", "enum": ["push", "pull_request", "schedule", "manual"] },
+                    "failOnWarnings": { "type": "boolean" }
+                  }
+                },
+                "api": {
+                  "type": "object",
+                  "properties": {
+                    "trigger": { "type": "string" },
+                    "schedule": { "type": "string" }
+                  }
+                },
+                "full": {
+                  "type": "object",
+                  "properties": {
+                    "trigger": { "type": "string" },
+                    "failOnWarnings": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "secretScanning": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "patterns": { "type": "array", "items": { "type": "string" } },
+            "exclude": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "dependencyScanning": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "tools": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["npm-audit", "snyk", "dependabot", "trivy"] }
+            },
+            "severityThreshold": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+          }
+        },
+        "codeql": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "languages": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["javascript", "typescript", "python", "java", "csharp", "go", "ruby", "cpp"] }
+            }
+          }
+        }
+      }
+    },
+    "linting": {
+      "type": "object",
+      "description": "Code linting configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "failOnError": { "type": "boolean", "default": true },
+        "languages": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "tool": { "type": "string" },
+              "config": { "type": "string" },
+              "extensions": { "type": "array", "items": { "type": "string" } },
+              "rules": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "naming": {
+      "type": "object",
+      "description": "Naming convention enforcement",
+      "properties": {
+        "enforce": { "type": "boolean" },
+        "rules": {
+          "type": "object",
+          "properties": {
+            "files": { "type": "object", "additionalProperties": { "type": "string" } },
+            "folders": { "type": "string", "enum": ["PascalCase", "camelCase", "snake_case", "kebab-case", "SCREAMING_SNAKE_CASE"] },
+            "variables": { "type": "object", "additionalProperties": { "type": "string" } },
+            "constants": { "type": "string" }
+          }
+        }
+      }
+    },
+    "testing": {
+      "type": "object",
+      "description": "Testing configuration",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "phases": {
+          "type": "object",
+          "properties": {
+            "unit": { "$ref": "#/definitions/testPhase" },
+            "integration": { "$ref": "#/definitions/testPhase" },
+            "e2e": { "$ref": "#/definitions/testPhase" },
+            "performance": { "$ref": "#/definitions/testPhase" }
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "threshold": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "failOnThreshold": { "type": "boolean" }
+          }
+        },
+        "regression": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "baselineDirectory": { "type": "string" }
+          }
+        }
+      }
+    },
+    "releases": {
+      "type": "object",
+      "description": "Release configuration",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "versioning": {
+          "type": "object",
+          "properties": {
+            "strategy": { "type": "string", "enum": ["semver", "calver", "custom"] },
+            "bumpRules": {
+              "type": "object",
+              "additionalProperties": { "type": "string", "enum": ["major", "minor", "patch"] }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "object",
+          "properties": {
+            "upload": { "type": "boolean" },
+            "retentionDays": { "type": "integer", "minimum": 1 },
+            "formats": { "type": "array", "items": { "type": "string", "enum": ["zip", "tar.gz", "7z"] } }
+          }
+        },
+        "notes": {
+          "type": "object",
+          "properties": {
+            "generate": { "type": "boolean" },
+            "template": { "type": "string" },
+            "includeChangelog": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "description": "Notification settings",
+      "properties": {
+        "teams": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "webhookSecret": { "type": "string" },
+            "events": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "email": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "events": { "type": "array", "items": { "type": "string" } },
+            "template": { "type": "string" }
+          }
+        },
+        "github": {
+          "type": "object",
+          "properties": {
+            "issues": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "events": { "type": "array", "items": { "type": "string" } }
+              }
+            },
+            "prComments": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "events": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cicd": {
+      "type": "object",
+      "description": "CI/CD pipeline configuration",
+      "properties": {
+        "provider": { "type": "string", "enum": ["github", "gitlab", "azure-devops", "jenkins"] },
+        "environments": { "type": "array", "items": { "type": "string" } },
+        "qualityGates": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "required": { "type": "boolean" },
+              "blocking": { "type": "boolean" }
+            }
+          }
+        },
+        "deployment": {
+          "type": "object",
+          "properties": {
+            "strategy": { "type": "string", "enum": ["staged", "blue-green", "canary", "rolling"] },
+            "requireApproval": { "type": "array", "items": { "type": "string" } },
+            "healthCheck": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "timeout": { "type": "integer" },
+                "retries": { "type": "integer" }
+              }
+            },
+            "rollback": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "automatic": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "testPhase": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "required": { "type": "boolean" }
+      }
+    }
+  },
+  "required": ["version", "project"],
+  "additionalProperties": false
+}

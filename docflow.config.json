@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/your-org/docflow-template/main/docflow.schema.json",
+  "$schema": "./docflow.schema.json",
   "version": "1.0.0",
 
   "project": {
