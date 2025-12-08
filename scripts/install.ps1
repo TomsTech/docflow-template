@@ -100,7 +100,12 @@ if (-not $SkipTemplates) {
     $templatesDest = Join-Path $TargetPath "docs\templates"
 
     if (Test-Path $templatesSource) {
-        Copy-Item -Path $templatesSource -Destination $templatesDest -Recurse -Force
+        # Ensure destination exists
+        if (-not (Test-Path $templatesDest)) {
+            New-Item -ItemType Directory -Path $templatesDest -Force | Out-Null
+        }
+        # Copy contents, not the folder itself (avoids nested templates/templates)
+        Copy-Item -Path "$templatesSource\*" -Destination $templatesDest -Recurse -Force
         Write-Host "  ADD:  docs/templates/*" -ForegroundColor Green
     }
     Write-Host ""
