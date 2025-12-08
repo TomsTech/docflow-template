@@ -325,7 +325,7 @@ jobs:
 
       - name: OWASP ZAP Full Scan
         if: steps.full_target.outputs.has_target == 'true'
-        uses: zaproxy/action-full-scan@v0.10.0
+        uses: zaproxy/action-full-scan@v0.13.0
         with:
           target: ${{ steps.full_target.outputs.url }}
           rules_file_name: '.zap/rules.tsv'
