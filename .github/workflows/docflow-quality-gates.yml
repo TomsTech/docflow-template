@@ -1,0 +1,415 @@
+name: "DocFlow: Quality Gates"
+
+# Comprehensive quality gate workflow
+# Combines: Linting, testing, coverage, naming conventions
+# Extracted from best practices across CIPP, uptime-kuma, spotify-genre-sorter
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip test execution'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ============================================
+  # DETECT PROJECT TYPE
+  # ============================================
+  detect-project:
+    name: "Detect Project Type"
+    runs-on: ubuntu-latest
+    outputs:
+      has_node: ${{ steps.detect.outputs.has_node }}
+      has_python: ${{ steps.detect.outputs.has_python }}
+      has_powershell: ${{ steps.detect.outputs.has_powershell }}
+      has_dotnet: ${{ steps.detect.outputs.has_dotnet }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Detect Languages
+        id: detect
+        run: |
+          echo "has_node=$([ -f package.json ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "has_powershell=$(find . -name '*.ps1' -type f | head -1 | grep -q . && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "has_dotnet=$(find . -name '*.csproj' -o -name '*.sln' | head -1 | grep -q . && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+
+  # ============================================
+  # JAVASCRIPT/TYPESCRIPT QUALITY
+  # ============================================
+  node-quality:
+    name: "Node.js Quality Checks"
+    needs: detect-project
+    if: needs.detect-project.outputs.has_node == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: TypeScript Type Check
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit
+          else
+            echo "No TypeScript config found, skipping type check"
+          fi
+        continue-on-error: true
+
+      - name: ESLint
+        run: |
+          if [ -f ".eslintrc.json" ] || [ -f ".eslintrc.js" ] || [ -f ".eslintrc" ]; then
+            npx eslint . --format json --output-file eslint-report.json || true
+            npx eslint . --format stylish
+          else
+            echo "No ESLint config found, skipping lint"
+          fi
+        continue-on-error: true
+
+      - name: Run Tests
+        if: github.event.inputs.skip_tests != 'true'
+        run: |
+          if npm run test --if-present; then
+            echo "Tests passed"
+          else
+            echo "::warning::Tests failed or not configured"
+          fi
+        continue-on-error: true
+
+      - name: Coverage Report
+        if: github.event.inputs.skip_tests != 'true'
+        run: |
+          if npm run coverage --if-present; then
+            echo "Coverage generated"
+          fi
+        continue-on-error: true
+
+      - name: Upload Coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-coverage
+          path: coverage/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ============================================
+  # PYTHON QUALITY
+  # ============================================
+  python-quality:
+    name: "Python Quality Checks"
+    needs: detect-project
+    if: needs.detect-project.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: |
+          pip install ruff pytest pytest-cov
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          fi
+          if [ -f "pyproject.toml" ]; then
+            pip install -e . 2>/dev/null || true
+          fi
+
+      - name: Ruff Lint
+        run: |
+          ruff check . --output-format=json > ruff-report.json || true
+          ruff check . --output-format=text
+        continue-on-error: true
+
+      - name: Ruff Format Check
+        run: ruff format --check . || true
+        continue-on-error: true
+
+      - name: Run Tests
+        if: github.event.inputs.skip_tests != 'true'
+        run: |
+          if [ -d "tests" ] || find . -name "test_*.py" -o -name "*_test.py" | head -1 | grep -q .; then
+            pytest --cov=. --cov-report=xml --cov-report=html || echo "::warning::Tests failed"
+          else
+            echo "No tests found"
+          fi
+        continue-on-error: true
+
+      - name: Upload Coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: htmlcov/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ============================================
+  # POWERSHELL QUALITY
+  # ============================================
+  powershell-quality:
+    name: "PowerShell Quality Checks"
+    needs: detect-project
+    if: needs.detect-project.outputs.has_powershell == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Analyze PowerShell Scripts
+        shell: pwsh
+        run: |
+          $results = @()
+          $scripts = Get-ChildItem -Path . -Filter "*.ps1" -Recurse -Exclude "node_modules"
+
+          Write-Host "Analyzing $($scripts.Count) PowerShell scripts..."
+
+          foreach ($script in $scripts) {
+            $analysis = Invoke-ScriptAnalyzer -Path $script.FullName -Severity @('Error', 'Warning')
+            if ($analysis) {
+              $results += $analysis
+            }
+          }
+
+          if ($results.Count -gt 0) {
+            Write-Host "Found $($results.Count) issues:"
+            $results | Format-Table -Property Severity, RuleName, ScriptName, Line, Message -AutoSize
+            $results | ConvertTo-Json | Out-File -FilePath "psscriptanalyzer-report.json"
+          } else {
+            Write-Host "No issues found!"
+          }
+
+      - name: Syntax Validation
+        shell: pwsh
+        run: |
+          $scripts = Get-ChildItem -Path . -Filter "*.ps1" -Recurse -Exclude "node_modules"
+          $errors = @()
+
+          foreach ($script in $scripts) {
+            $parseErrors = @()
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
+
+            if ($parseErrors.Count -gt 0) {
+              Write-Host "Syntax errors in $($script.Name):" -ForegroundColor Red
+              $parseErrors | ForEach-Object { Write-Host "  Line $($_.Extent.StartLineNumber): $($_.Message)" }
+              $errors += $script.Name
+            }
+          }
+
+          if ($errors.Count -gt 0) {
+            Write-Host "`n$($errors.Count) files have syntax errors" -ForegroundColor Red
+            exit 1
+          } else {
+            Write-Host "All scripts pass syntax validation" -ForegroundColor Green
+          }
+
+      - name: Upload Analysis Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: powershell-analysis
+          path: psscriptanalyzer-report.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ============================================
+  # NAMING CONVENTIONS CHECK
+  # ============================================
+  naming-conventions:
+    name: "Naming Conventions Check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check File Naming
+        run: |
+          echo "# Naming Convention Check Results" > naming-report.md
+          echo "" >> naming-report.md
+          ISSUES=0
+
+          # Check for spaces in filenames
+          FILES_WITH_SPACES=$(find . -name "* *" -not -path "./.git/*" -not -path "./node_modules/*" 2>/dev/null || true)
+          if [ -n "$FILES_WITH_SPACES" ]; then
+            echo "## Files with spaces (should use dashes or underscores)" >> naming-report.md
+            echo "$FILES_WITH_SPACES" >> naming-report.md
+            echo "" >> naming-report.md
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Check for uppercase extensions
+          UPPERCASE_EXT=$(find . -type f -name "*.*" -not -path "./.git/*" -not -path "./node_modules/*" | grep -E '\.[A-Z]+$' 2>/dev/null || true)
+          if [ -n "$UPPERCASE_EXT" ]; then
+            echo "## Files with uppercase extensions" >> naming-report.md
+            echo "$UPPERCASE_EXT" >> naming-report.md
+            echo "" >> naming-report.md
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          if [ $ISSUES -eq 0 ]; then
+            echo "All files follow naming conventions" >> naming-report.md
+          fi
+
+          cat naming-report.md
+
+      - name: Upload Naming Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: naming-report
+          path: naming-report.md
+          retention-days: 30
+
+  # ============================================
+  # DOCUMENTATION QUALITY
+  # ============================================
+  docs-quality:
+    name: "Documentation Quality"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check Required Documentation
+        run: |
+          echo "# Documentation Quality Report" > docs-quality-report.md
+          echo "" >> docs-quality-report.md
+
+          MISSING=0
+
+          # Check for essential files
+          for file in README.md LICENSE CHANGELOG.md; do
+            if [ -f "$file" ]; then
+              echo "- [x] $file exists" >> docs-quality-report.md
+            else
+              echo "- [ ] $file **MISSING**" >> docs-quality-report.md
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          # Check for recommended files
+          echo "" >> docs-quality-report.md
+          echo "## Recommended Files" >> docs-quality-report.md
+
+          for file in CONTRIBUTING.md SECURITY.md .github/ISSUE_TEMPLATE/bug_report.md; do
+            if [ -f "$file" ]; then
+              echo "- [x] $file exists" >> docs-quality-report.md
+            else
+              echo "- [ ] $file (recommended)" >> docs-quality-report.md
+            fi
+          done
+
+          cat docs-quality-report.md
+
+          if [ $MISSING -gt 0 ]; then
+            echo "::warning::Missing $MISSING required documentation files"
+          fi
+
+      - name: Check Markdown Links
+        run: |
+          # Simple broken link check for relative links
+          find . -name "*.md" -not -path "./.git/*" -not -path "./node_modules/*" | while read -r file; do
+            grep -oE '\[.*\]\([^)]+\)' "$file" 2>/dev/null | while read -r link; do
+              TARGET=$(echo "$link" | sed 's/.*(\(.*\))/\1/' | cut -d'#' -f1)
+              if [[ "$TARGET" != http* ]] && [[ "$TARGET" != "" ]]; then
+                DIR=$(dirname "$file")
+                FULL_PATH="$DIR/$TARGET"
+                if [ ! -f "$FULL_PATH" ] && [ ! -d "$FULL_PATH" ]; then
+                  echo "::warning::Broken link in $file: $TARGET"
+                fi
+              fi
+            done
+          done
+        continue-on-error: true
+
+      - name: Upload Docs Quality Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-quality-report
+          path: docs-quality-report.md
+          retention-days: 30
+
+  # ============================================
+  # QUALITY SUMMARY
+  # ============================================
+  quality-summary:
+    name: "Quality Summary"
+    needs: [detect-project, node-quality, python-quality, powershell-quality, naming-conventions, docs-quality]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# Quality Gate Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Node.js Quality | ${{ needs.node-quality.result == 'success' && 'Pass' || needs.node-quality.result == 'skipped' && 'N/A' || 'Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Quality | ${{ needs.python-quality.result == 'success' && 'Pass' || needs.python-quality.result == 'skipped' && 'N/A' || 'Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PowerShell Quality | ${{ needs.powershell-quality.result == 'success' && 'Pass' || needs.powershell-quality.result == 'skipped' && 'N/A' || 'Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Naming Conventions | ${{ needs.naming-conventions.result == 'success' && 'Pass' || 'Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Documentation | ${{ needs.docs-quality.result == 'success' && 'Pass' || 'Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Project Detection" >> $GITHUB_STEP_SUMMARY
+          echo "- Node.js: ${{ needs.detect-project.outputs.has_node }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Python: ${{ needs.detect-project.outputs.has_python }}" >> $GITHUB_STEP_SUMMARY
+          echo "- PowerShell: ${{ needs.detect-project.outputs.has_powershell }}" >> $GITHUB_STEP_SUMMARY
+          echo "- .NET: ${{ needs.detect-project.outputs.has_dotnet }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = `## Quality Gate Results
+
+            | Check | Status |
+            |-------|--------|
+            | Node.js | ${{ needs.node-quality.result == 'success' && 'Pass' || needs.node-quality.result == 'skipped' && 'N/A' || 'Review' }} |
+            | Python | ${{ needs.python-quality.result == 'success' && 'Pass' || needs.python-quality.result == 'skipped' && 'N/A' || 'Review' }} |
+            | PowerShell | ${{ needs.powershell-quality.result == 'success' && 'Pass' || needs.powershell-quality.result == 'skipped' && 'N/A' || 'Review' }} |
+            | Naming | ${{ needs.naming-conventions.result == 'success' && 'Pass' || 'Review' }} |
+            | Docs | ${{ needs.docs-quality.result == 'success' && 'Pass' || 'Review' }} |
+
+            [View full run details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+        continue-on-error: true

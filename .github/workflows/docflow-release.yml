@@ -1,0 +1,402 @@
+name: "DocFlow: Release Management"
+
+# Comprehensive release management workflow
+# Combines: Semantic versioning, changelog, GitHub releases, artifacts
+# Extracted from best practices across CIPP-API, spotify-genre-sorter, rustdesk
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+      generate_changelog:
+        description: 'Auto-generate changelog'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  ARTIFACTS_DIR: release-artifacts
+
+jobs:
+  # ============================================
+  # VALIDATE & PREPARE
+  # ============================================
+  prepare-release:
+    name: "Prepare Release"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v$VERSION"
+            IS_PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            # Check if it's a prerelease (contains alpha, beta, rc)
+            if echo "$VERSION" | grep -qE '(alpha|beta|rc)'; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+          echo "Version: $VERSION"
+          echo "Tag: $TAG"
+          echo "Prerelease: $IS_PRERELEASE"
+
+      - name: Generate Changelog
+        id: changelog
+        if: github.event.inputs.generate_changelog != 'false'
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          echo "# Release Notes for ${{ steps.version.outputs.tag }}" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "## What's Changed" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          if [ -n "$PREV_TAG" ]; then
+            # Generate changelog from conventional commits
+            echo "### Features" >> RELEASE_NOTES.md
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^feat" | head -20 >> RELEASE_NOTES.md || echo "No new features" >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+
+            echo "### Bug Fixes" >> RELEASE_NOTES.md
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^fix" | head -20 >> RELEASE_NOTES.md || echo "No bug fixes" >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+
+            echo "### Documentation" >> RELEASE_NOTES.md
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^docs" | head -10 >> RELEASE_NOTES.md || echo "No documentation changes" >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+
+            echo "### Other Changes" >> RELEASE_NOTES.md
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --invert-grep --grep="^feat\|^fix\|^docs" | head -10 >> RELEASE_NOTES.md || true
+            echo "" >> RELEASE_NOTES.md
+
+            echo "**Full Changelog**: [$PREV_TAG...${{ steps.version.outputs.tag }}](${{ github.server_url }}/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.version.outputs.tag }})" >> RELEASE_NOTES.md
+          else
+            echo "Initial release" >> RELEASE_NOTES.md
+          fi
+
+          cat RELEASE_NOTES.md
+
+          # Store for later use
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          cat RELEASE_NOTES.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Upload Release Notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
+          retention-days: 30
+
+  # ============================================
+  # BUILD ARTIFACTS
+  # ============================================
+  build-artifacts:
+    name: "Build Release Artifacts"
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+        continue-on-error: true
+
+      - name: Build Project
+        run: |
+          mkdir -p $ARTIFACTS_DIR
+
+          # Node.js build
+          if [ -f "package.json" ]; then
+            npm ci
+            npm run build --if-present
+          fi
+
+          # Python build
+          if [ -f "pyproject.toml" ]; then
+            pip install build
+            python -m build
+            cp dist/* $ARTIFACTS_DIR/ 2>/dev/null || true
+          fi
+        continue-on-error: true
+
+      - name: Create Source Archives
+        run: |
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+
+          # Create ZIP archive
+          git archive --format=zip --prefix="${REPO_NAME}-${VERSION}/" HEAD > "$ARTIFACTS_DIR/${REPO_NAME}-${VERSION}-source.zip"
+
+          # Create TAR.GZ archive
+          git archive --format=tar.gz --prefix="${REPO_NAME}-${VERSION}/" HEAD > "$ARTIFACTS_DIR/${REPO_NAME}-${VERSION}-source.tar.gz"
+
+          # List artifacts
+          ls -la $ARTIFACTS_DIR/
+
+      - name: Generate Checksums
+        run: |
+          cd $ARTIFACTS_DIR
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: ${{ env.ARTIFACTS_DIR }}/
+          retention-days: 365
+
+  # ============================================
+  # GENERATE DOCUMENTATION
+  # ============================================
+  generate-release-docs:
+    name: "Generate Release Documentation"
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex
+
+      - name: Generate PDF Documentation
+        run: |
+          mkdir -p $ARTIFACTS_DIR/docs
+
+          # Convert README to PDF
+          if [ -f "README.md" ]; then
+            pandoc README.md -o "$ARTIFACTS_DIR/docs/README-${{ needs.prepare-release.outputs.version }}.pdf" \
+              --pdf-engine=xelatex \
+              -V geometry:margin=1in \
+              --toc || echo "PDF generation failed"
+          fi
+
+          # Convert CHANGELOG to PDF
+          if [ -f "CHANGELOG.md" ]; then
+            pandoc CHANGELOG.md -o "$ARTIFACTS_DIR/docs/CHANGELOG-${{ needs.prepare-release.outputs.version }}.pdf" \
+              --pdf-engine=xelatex \
+              -V geometry:margin=1in || echo "CHANGELOG PDF generation failed"
+          fi
+        continue-on-error: true
+
+      - name: Upload Documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-docs
+          path: ${{ env.ARTIFACTS_DIR }}/docs/
+          retention-days: 365
+          if-no-files-found: ignore
+
+  # ============================================
+  # CREATE GITHUB RELEASE
+  # ============================================
+  create-release:
+    name: "Create GitHub Release"
+    needs: [prepare-release, build-artifacts, generate-release-docs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets
+
+          # Copy all artifacts to release folder
+          find artifacts/ -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.pdf" -o -name "checksums.txt" \) -exec cp {} release-assets/ \;
+
+          ls -la release-assets/
+
+      - name: Create Tag (if manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          name: Release ${{ needs.prepare-release.outputs.version }}
+          body_path: artifacts/release-notes/RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
+          files: release-assets/*
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================
+  # NOTIFY
+  # ============================================
+  notify-release:
+    name: "Notify Release"
+    needs: [prepare-release, create-release]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ needs.prepare-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${{ needs.prepare-release.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pre-release**: ${{ needs.prepare-release.outputs.is_prerelease }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release URL**: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Send Teams Notification
+        if: env.TEAMS_WEBHOOK_URL != ''
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+        run: |
+          curl -H "Content-Type: application/json" -d '{
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                  {
+                    "type": "TextBlock",
+                    "text": "New Release Published",
+                    "weight": "Bolder",
+                    "size": "Large",
+                    "color": "Good"
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      {"title": "Version", "value": "${{ needs.prepare-release.outputs.version }}"},
+                      {"title": "Repository", "value": "${{ github.repository }}"},
+                      {"title": "Published By", "value": "${{ github.actor }}"}
+                    ]
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View Release",
+                    "url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.tag }}"
+                  }
+                ]
+              }
+            }]
+          }' "$TEAMS_WEBHOOK_URL" || echo "Teams notification skipped"
+        continue-on-error: true
+
+  # ============================================
+  # UPDATE CHANGELOG
+  # ============================================
+  update-changelog:
+    name: "Update CHANGELOG.md"
+    needs: [prepare-release, create-release]
+    if: success() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update CHANGELOG
+        run: |
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+          DATE=$(date +%Y-%m-%d)
+
+          # Prepend new version to CHANGELOG
+          if [ -f "CHANGELOG.md" ]; then
+            # Create new entry
+            cat > /tmp/new_entry.md << EOF
+          ## [$VERSION] - $DATE
+
+          ${{ needs.prepare-release.outputs.changelog }}
+
+          EOF
+            # Insert after the header
+            sed -i '/^# Changelog/a\\' CHANGELOG.md
+            sed -i '/^# Changelog/r /tmp/new_entry.md' CHANGELOG.md
+          else
+            # Create new CHANGELOG
+            cat > CHANGELOG.md << EOF
+          # Changelog
+
+          All notable changes to this project will be documented in this file.
+
+          ## [$VERSION] - $DATE
+
+          Initial release.
+          EOF
+          fi
+
+      - name: Commit CHANGELOG
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add CHANGELOG.md
+
+          if ! git diff --staged --quiet; then
+            git commit -m "docs: update CHANGELOG for ${{ needs.prepare-release.outputs.version }} [skip ci]"
+            git push
+          fi

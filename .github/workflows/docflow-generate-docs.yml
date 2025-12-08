@@ -1,0 +1,515 @@
+name: "DocFlow: Generate Documentation"
+
+# Universal documentation generation workflow
+# Extracted from best practices across 24+ repositories
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'docs/**'
+      - '*.md'
+      - 'docflow.config.json'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      format:
+        description: 'Output format'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - markdown
+          - pdf
+          - docx
+          - all
+      regenerate_all:
+        description: 'Force regenerate all documentation'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # Weekly documentation refresh (Monday 6 AM UTC)
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  DOCS_DIR: docs/generated
+  CONFIG_FILE: docflow.config.json
+
+jobs:
+  detect-changes:
+    name: "Detect Documentation Changes"
+    runs-on: ubuntu-latest
+    outputs:
+      docs_changed: ${{ steps.changes.outputs.docs }}
+      src_changed: ${{ steps.changes.outputs.src }}
+      config_changed: ${{ steps.changes.outputs.config }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect Changed Files
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "docs=true" >> $GITHUB_OUTPUT
+            echo "src=true" >> $GITHUB_OUTPUT
+            echo "config=true" >> $GITHUB_OUTPUT
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+
+            echo "docs=$(echo "$CHANGED" | grep -q '^docs/' && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+            echo "src=$(echo "$CHANGED" | grep -q '^src/' && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+            echo "config=$(echo "$CHANGED" | grep -q 'docflow.config.json' && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          fi
+
+  generate-readme:
+    name: "Generate README"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.src_changed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+        continue-on-error: true
+
+      - name: Generate README Badges
+        id: badges
+        run: |
+          # Read project config
+          if [ -f "$CONFIG_FILE" ]; then
+            PROJECT_NAME=$(jq -r '.project.name // "Project"' $CONFIG_FILE)
+            OWNER=$(jq -r '.project.owner // "${{ github.repository_owner }}"' $CONFIG_FILE)
+            REPO=$(jq -r '.project.repository // "${{ github.event.repository.name }}"' $CONFIG_FILE)
+          else
+            PROJECT_NAME="${{ github.event.repository.name }}"
+            OWNER="${{ github.repository_owner }}"
+            REPO="${{ github.event.repository.name }}"
+          fi
+
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          echo "owner=$OWNER" >> $GITHUB_OUTPUT
+          echo "repo=$REPO" >> $GITHUB_OUTPUT
+
+      - name: Generate Project Statistics
+        run: |
+          echo "## Project Statistics" > $DOCS_DIR/STATISTICS.md
+          echo "" >> $DOCS_DIR/STATISTICS.md
+          echo "| Metric | Value |" >> $DOCS_DIR/STATISTICS.md
+          echo "|--------|-------|" >> $DOCS_DIR/STATISTICS.md
+
+          # Count files by type
+          JS_COUNT=$(find src -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" 2>/dev/null | wc -l || echo "0")
+          PY_COUNT=$(find src -name "*.py" 2>/dev/null | wc -l || echo "0")
+          PS_COUNT=$(find . -name "*.ps1" 2>/dev/null | wc -l || echo "0")
+          MD_COUNT=$(find . -name "*.md" 2>/dev/null | wc -l || echo "0")
+          TEST_COUNT=$(find . -name "*.test.*" -o -name "*.spec.*" 2>/dev/null | wc -l || echo "0")
+          WORKFLOW_COUNT=$(find .github/workflows -name "*.yml" 2>/dev/null | wc -l || echo "0")
+
+          echo "| JavaScript/TypeScript Files | $JS_COUNT |" >> $DOCS_DIR/STATISTICS.md
+          echo "| Python Files | $PY_COUNT |" >> $DOCS_DIR/STATISTICS.md
+          echo "| PowerShell Scripts | $PS_COUNT |" >> $DOCS_DIR/STATISTICS.md
+          echo "| Documentation Files | $MD_COUNT |" >> $DOCS_DIR/STATISTICS.md
+          echo "| Test Files | $TEST_COUNT |" >> $DOCS_DIR/STATISTICS.md
+          echo "| GitHub Workflows | $WORKFLOW_COUNT |" >> $DOCS_DIR/STATISTICS.md
+          echo "| Last Updated | $(date -u +%Y-%m-%d) |" >> $DOCS_DIR/STATISTICS.md
+
+  generate-diagrams:
+    name: "Generate Mermaid Diagrams"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.src_changed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Generate Architecture Diagram
+        run: |
+          mkdir -p $DOCS_DIR/diagrams
+
+          cat > $DOCS_DIR/diagrams/ARCHITECTURE.md << 'DIAGRAM_EOF'
+          # Architecture Diagrams
+
+          ## System Overview
+
+          ```mermaid
+          graph TB
+              subgraph "External"
+                  USER["Users"]
+                  EXT["External Services"]
+              end
+
+              subgraph "Application"
+                  UI["Frontend"]
+                  API["API Layer"]
+                  SVC["Business Logic"]
+              end
+
+              subgraph "Data"
+                  DB[(Database)]
+                  CACHE[(Cache)]
+              end
+
+              USER --> UI
+              UI --> API
+              API --> SVC
+              SVC --> DB
+              SVC --> CACHE
+              SVC --> EXT
+          ```
+
+          ## CI/CD Pipeline
+
+          ```mermaid
+          flowchart LR
+              subgraph "Quality Gates"
+                  LINT["Lint"]
+                  TEST["Test"]
+                  SEC["Security"]
+              end
+
+              subgraph "Build"
+                  BUILD["Build"]
+                  DOCS["Generate Docs"]
+              end
+
+              subgraph "Deploy"
+                  STAGE["Staging"]
+                  PROD["Production"]
+              end
+
+              LINT --> TEST --> SEC --> BUILD
+              BUILD --> DOCS
+              BUILD --> STAGE --> PROD
+          ```
+
+          ## Request Lifecycle
+
+          ```mermaid
+          stateDiagram-v2
+              [*] --> Draft
+              Draft --> Submitted: Submit
+              Submitted --> Approved: Approve
+              Submitted --> Rejected: Reject
+              Submitted --> Draft: Return for Changes
+              Approved --> [*]
+              Rejected --> Draft: Resubmit
+              Rejected --> [*]
+              Draft --> Withdrawn: Cancel
+              Withdrawn --> [*]
+          ```
+          DIAGRAM_EOF
+
+      - name: Generate Folder Structure Diagram
+        run: |
+          cat > $DOCS_DIR/diagrams/FOLDER_STRUCTURE.md << 'FOLDER_EOF'
+          # Folder Structure
+
+          ```mermaid
+          graph TD
+              ROOT["Repository Root"]
+
+              ROOT --> GH[".github/"]
+              ROOT --> DESIGN[".design/"]
+              ROOT --> DOCS["docs/"]
+              ROOT --> SRC["src/"]
+              ROOT --> TESTS["tests/"]
+              ROOT --> SCRIPTS["scripts/"]
+
+              GH --> WF["workflows/"]
+              GH --> ISSUE["ISSUE_TEMPLATE/"]
+              GH --> BASE["baselines/"]
+
+              DOCS --> GEN["generated/"]
+              DOCS --> DIAG["diagrams/"]
+
+              WF --> CI["CI/CD Pipelines"]
+              DESIGN --> SPECS["Design Specs"]
+              GEN --> AUTO["Auto-generated Docs"]
+          ```
+
+          ## Directory Purposes
+
+          | Directory | Purpose |
+          |-----------|---------|
+          | `.github/workflows/` | CI/CD pipeline definitions |
+          | `.github/baselines/` | Regression test baselines |
+          | `.design/` | Design specifications (source of truth) |
+          | `docs/` | Project documentation |
+          | `docs/generated/` | Auto-generated documentation |
+          | `src/` | Source code |
+          | `tests/` | Test files |
+          | `scripts/` | Automation scripts |
+          FOLDER_EOF
+
+      - name: Upload Diagram Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagrams
+          path: ${{ env.DOCS_DIR }}/diagrams/
+          retention-days: 30
+
+  generate-data-dictionary:
+    name: "Generate Data Dictionary"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.src_changed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Generate Data Dictionary
+        run: |
+          mkdir -p $DOCS_DIR
+
+          cat > $DOCS_DIR/DATA_DICTIONARY.md << 'DATA_EOF'
+          # Data Dictionary
+
+          > Auto-generated documentation of data models and schemas.
+          > Last updated: $(date -u +%Y-%m-%d)
+
+          ## Overview
+
+          This document provides a comprehensive reference for all data entities, fields, and relationships in the system.
+
+          ## Naming Conventions
+
+          | Type | Convention | Example |
+          |------|------------|---------|
+          | Tables | snake_case | `user_profile` |
+          | Columns | snake_case | `created_at` |
+          | Primary Keys | `{table}_id` | `user_id` |
+          | Foreign Keys | `{related_table}_id` | `company_id` |
+          | Timestamps | `{action}_at` | `updated_at` |
+          | Booleans | `is_{state}` or `has_{thing}` | `is_active` |
+
+          ## Entity Reference
+
+          <!-- Entity documentation will be auto-generated based on schema files -->
+
+          ## Relationships
+
+          ```mermaid
+          erDiagram
+              USER ||--o{ ORDER : places
+              ORDER ||--|{ LINE_ITEM : contains
+              PRODUCT ||--o{ LINE_ITEM : "ordered in"
+          ```
+
+          ## Field Types Reference
+
+          | Type | Description | Example Values |
+          |------|-------------|----------------|
+          | `string` | Text data | "Hello World" |
+          | `integer` | Whole numbers | 42 |
+          | `decimal` | Decimal numbers | 19.99 |
+          | `boolean` | True/False | true |
+          | `datetime` | Date and time | 2024-01-15T10:30:00Z |
+          | `uuid` | Unique identifier | 550e8400-e29b-41d4-a716-446655440000 |
+
+          DATA_EOF
+
+      - name: Upload Data Dictionary
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-dictionary
+          path: ${{ env.DOCS_DIR }}/DATA_DICTIONARY.md
+          retention-days: 30
+
+  generate-index:
+    name: "Generate Documentation Index"
+    needs: [generate-readme, generate-diagrams, generate-data-dictionary]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+        continue-on-error: true
+
+      - name: Generate Index
+        run: |
+          mkdir -p $DOCS_DIR
+
+          cat > $DOCS_DIR/INDEX.md << 'INDEX_EOF'
+          # Documentation Index
+
+          > Auto-generated documentation catalog
+          > Generated: $(date -u +%Y-%m-%d %H:%M:%S UTC)
+
+          ## Quick Navigation
+
+          | Document | Description | Status |
+          |----------|-------------|--------|
+          | [README](../../README.md) | Project overview | Core |
+          | [Architecture](diagrams/ARCHITECTURE.md) | System architecture diagrams | Auto |
+          | [Data Dictionary](DATA_DICTIONARY.md) | Data model reference | Auto |
+          | [Folder Structure](diagrams/FOLDER_STRUCTURE.md) | Repository structure | Auto |
+          | [API Reference](API_REFERENCE.md) | API documentation | Manual |
+          | [Deployment Guide](DEPLOYMENT_GUIDE.md) | Deployment instructions | Manual |
+
+          ## Documentation Map
+
+          ```mermaid
+          graph LR
+              subgraph "Getting Started"
+                  README["README"]
+                  INSTALL["Installation"]
+              end
+
+              subgraph "Reference"
+                  API["API Docs"]
+                  DATA["Data Dictionary"]
+              end
+
+              subgraph "Architecture"
+                  ARCH["Architecture"]
+                  ERD["ERD Diagrams"]
+              end
+
+              subgraph "Operations"
+                  DEPLOY["Deployment"]
+                  TROUBLE["Troubleshooting"]
+              end
+
+              README --> INSTALL
+              INSTALL --> API
+              API --> DATA
+              DATA --> ARCH
+              ARCH --> ERD
+              ERD --> DEPLOY
+              DEPLOY --> TROUBLE
+          ```
+
+          ## Auto-Generated vs Manual Documentation
+
+          - **Auto-Generated**: Updated automatically by CI/CD pipeline
+          - **Manual**: Requires human updates, reviewed periodically
+
+          ## Contributing to Documentation
+
+          1. For auto-generated docs: Update source files and CI will regenerate
+          2. For manual docs: Create PR with changes to `docs/` folder
+          3. Follow the documentation style guide in `.design/`
+
+          INDEX_EOF
+
+      - name: Commit Documentation Changes
+        if: github.event_name != 'pull_request'
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+
+          git add docs/
+
+          if git diff --staged --quiet; then
+            echo "No documentation changes to commit"
+          else
+            git commit -m "docs: auto-update documentation [skip ci]"
+            git push
+          fi
+
+  convert-to-pdf:
+    name: "Convert to PDF/DOCX"
+    needs: generate-index
+    if: (github.event.inputs.format == 'pdf' || github.event.inputs.format == 'docx' || github.event.inputs.format == 'all') && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended
+
+      - name: Convert Markdown to PDF
+        if: github.event.inputs.format == 'pdf' || github.event.inputs.format == 'all'
+        run: |
+          mkdir -p $DOCS_DIR/pdf
+
+          for md_file in $DOCS_DIR/*.md; do
+            if [ -f "$md_file" ]; then
+              filename=$(basename "$md_file" .md)
+              pandoc "$md_file" \
+                -o "$DOCS_DIR/pdf/${filename}.pdf" \
+                --pdf-engine=xelatex \
+                -V geometry:margin=1in \
+                -V fontsize=11pt \
+                --toc \
+                --toc-depth=3 || echo "Failed to convert $md_file"
+            fi
+          done
+
+      - name: Convert Markdown to DOCX
+        if: github.event.inputs.format == 'docx' || github.event.inputs.format == 'all'
+        run: |
+          mkdir -p $DOCS_DIR/docx
+
+          for md_file in $DOCS_DIR/*.md; do
+            if [ -f "$md_file" ]; then
+              filename=$(basename "$md_file" .md)
+              pandoc "$md_file" \
+                -o "$DOCS_DIR/docx/${filename}.docx" \
+                --toc \
+                --toc-depth=3 || echo "Failed to convert $md_file"
+            fi
+          done
+
+      - name: Upload PDF Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-pdf
+          path: ${{ env.DOCS_DIR }}/pdf/
+          retention-days: 90
+        if: github.event.inputs.format == 'pdf' || github.event.inputs.format == 'all'
+
+      - name: Upload DOCX Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-docx
+          path: ${{ env.DOCS_DIR }}/docx/
+          retention-days: 90
+        if: github.event.inputs.format == 'docx' || github.event.inputs.format == 'all'
+
+  summary:
+    name: "Documentation Summary"
+    needs: [generate-index, convert-to-pdf]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# Documentation Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Diagrams | ${{ needs.generate-diagrams.result == 'success' && 'Pass' || needs.generate-diagrams.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Data Dictionary | ${{ needs.generate-data-dictionary.result == 'success' && 'Pass' || needs.generate-data-dictionary.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Index | ${{ needs.generate-index.result == 'success' && 'Pass' || needs.generate-index.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PDF/DOCX | ${{ needs.convert-to-pdf.result == 'success' && 'Pass' || needs.convert-to-pdf.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Triggered By" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
