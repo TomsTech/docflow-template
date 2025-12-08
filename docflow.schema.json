@@ -593,6 +593,58 @@
           }
         }
       }
+    },
+    "aggregate": {
+      "type": "object",
+      "description": "Multi-repository documentation aggregation settings",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable documentation aggregation from multiple repos",
+          "default": false
+        },
+        "repos": {
+          "type": "array",
+          "description": "List of repositories to aggregate (org/repo format)",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$"
+          },
+          "default": []
+        },
+        "output": {
+          "type": "string",
+          "description": "Output directory for aggregated documentation",
+          "default": "docs/aggregated"
+        },
+        "sections": {
+          "type": "array",
+          "description": "Documentation sections to aggregate",
+          "items": {
+            "type": "string",
+            "enum": ["adr", "api", "runbooks", "features", "architecture", "database", "security", "deployment"]
+          },
+          "default": ["adr", "api", "runbooks"]
+        },
+        "schedule": {
+          "type": "string",
+          "description": "Aggregation schedule",
+          "enum": ["daily", "weekly", "monthly", "manual"],
+          "default": "weekly"
+        },
+        "conflictResolution": {
+          "type": "string",
+          "description": "How to handle filename conflicts",
+          "enum": ["prefix", "merge", "skip", "error"],
+          "default": "prefix"
+        },
+        "cloneDepth": {
+          "type": "integer",
+          "description": "Git clone depth for source repos",
+          "minimum": 1,
+          "default": 1
+        }
+      }
     }
   },
   "definitions": {

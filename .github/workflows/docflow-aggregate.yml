@@ -1,0 +1,303 @@
+name: "DocFlow: Aggregate Multi-Repo Documentation"
+
+# Aggregate documentation from multiple repositories into a unified docs site
+# Runs on schedule or manually triggered
+
+on:
+  schedule:
+    # Weekly aggregation (Sunday at 2 AM UTC)
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'Comma-separated repos to aggregate (org/repo1,org/repo2)'
+        required: false
+        type: string
+      sections:
+        description: 'Comma-separated sections to aggregate (adr,api,runbooks)'
+        required: false
+        type: string
+      clean:
+        description: 'Clean output directory before aggregating'
+        required: false
+        default: true
+        type: boolean
+      commit:
+        description: 'Commit aggregated docs to repository'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  OUTPUT_DIR: docs/aggregated
+  NODE_VERSION: '18'
+
+jobs:
+  aggregate-docs:
+    name: "Aggregate Documentation"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install DocFlow Dependencies
+        run: |
+          npm ci
+          npm link
+
+      - name: Load Configuration
+        id: config
+        run: |
+          if [ -f docflow.config.json ]; then
+            # Extract repos from config if not provided via input
+            if [ -z "${{ inputs.repos }}" ]; then
+              REPOS=$(node -e "const c=require('./docflow.config.json'); console.log((c.aggregate?.repos || []).join(','))")
+              echo "repos=$REPOS" >> $GITHUB_OUTPUT
+            else
+              echo "repos=${{ inputs.repos }}" >> $GITHUB_OUTPUT
+            fi
+
+            # Extract sections from config if not provided via input
+            if [ -z "${{ inputs.sections }}" ]; then
+              SECTIONS=$(node -e "const c=require('./docflow.config.json'); console.log((c.aggregate?.sections || []).join(','))")
+              echo "sections=$SECTIONS" >> $GITHUB_OUTPUT
+            else
+              echo "sections=${{ inputs.sections }}" >> $GITHUB_OUTPUT
+            fi
+
+            # Extract output directory
+            OUTPUT=$(node -e "const c=require('./docflow.config.json'); console.log(c.aggregate?.output || 'docs/aggregated')")
+            echo "output=$OUTPUT" >> $GITHUB_OUTPUT
+
+            # Check if aggregation is enabled
+            ENABLED=$(node -e "const c=require('./docflow.config.json'); console.log(c.aggregate?.enabled || false)")
+            echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "repos=" >> $GITHUB_OUTPUT
+            echo "sections=" >> $GITHUB_OUTPUT
+            echo "output=docs/aggregated" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate Configuration
+        run: |
+          if [ "${{ steps.config.outputs.enabled }}" != "true" ] && [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "::warning::Aggregation is not enabled in docflow.config.json. Skipping scheduled run."
+            exit 0
+          fi
+
+          if [ -z "${{ steps.config.outputs.repos }}" ]; then
+            echo "::error::No repositories configured. Set aggregate.repos in docflow.config.json or use --repos input."
+            exit 1
+          fi
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Aggregate Documentation
+        id: aggregate
+        run: |
+          echo "::group::Aggregating from repositories"
+
+          # Build command
+          CMD="docflow aggregate --clone"
+
+          if [ -n "${{ steps.config.outputs.repos }}" ]; then
+            CMD="$CMD --repos '${{ steps.config.outputs.repos }}'"
+          fi
+
+          if [ -n "${{ steps.config.outputs.sections }}" ]; then
+            CMD="$CMD --sections '${{ steps.config.outputs.sections }}'"
+          fi
+
+          if [ -n "${{ steps.config.outputs.output }}" ]; then
+            CMD="$CMD --output '${{ steps.config.outputs.output }}'"
+          fi
+
+          if [ "${{ inputs.clean }}" == "true" ]; then
+            CMD="$CMD --clean"
+          fi
+
+          echo "Running: $CMD"
+          eval $CMD
+
+          echo "::endgroup::"
+
+          # Count aggregated files
+          if [ -d "${{ steps.config.outputs.output }}" ]; then
+            DOC_COUNT=$(find "${{ steps.config.outputs.output }}" -name "*.md" | wc -l)
+            echo "doc_count=$DOC_COUNT" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "doc_count=0" >> $GITHUB_OUTPUT
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Summary
+        if: steps.aggregate.outputs.success == 'true'
+        run: |
+          cat << EOF > $GITHUB_STEP_SUMMARY
+          ## Documentation Aggregation Complete
+
+          ### Summary
+          - **Documents Aggregated**: ${{ steps.aggregate.outputs.doc_count }}
+          - **Source Repositories**: ${{ steps.config.outputs.repos }}
+          - **Sections**: ${{ steps.config.outputs.sections }}
+          - **Output Directory**: \`${{ steps.config.outputs.output }}\`
+
+          ### Changes
+          \`\`\`
+          $(git status --short ${{ steps.config.outputs.output }} || echo "No changes")
+          \`\`\`
+
+          ### Next Steps
+          - Review the aggregated documentation in \`${{ steps.config.outputs.output }}/INDEX.md\`
+          - Changes will be committed to the repository
+          EOF
+
+      - name: Check for Changes
+        id: changes
+        run: |
+          if [ -d "${{ steps.config.outputs.output }}" ]; then
+            git add "${{ steps.config.outputs.output }}"
+
+            if git diff --staged --quiet; then
+              echo "has_changes=false" >> $GITHUB_OUTPUT
+              echo "No changes detected in aggregated documentation"
+            else
+              echo "has_changes=true" >> $GITHUB_OUTPUT
+              CHANGED=$(git diff --staged --name-only | wc -l)
+              echo "changed_files=$CHANGED" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit Aggregated Documentation
+        if: steps.changes.outputs.has_changes == 'true' && (inputs.commit == true || github.event_name == 'schedule')
+        run: |
+          git add "${{ steps.config.outputs.output }}"
+
+          git commit -m "docs: aggregate documentation from ${{ steps.config.outputs.repos }}
+
+          Aggregated ${{ steps.aggregate.outputs.doc_count }} documents from configured repositories.
+
+          Sections: ${{ steps.config.outputs.sections }}
+
+          [skip ci]"
+
+          git push origin ${{ github.ref_name }}
+
+      - name: Create Pull Request (Manual Workflow)
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'workflow_dispatch' && inputs.commit == false
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            docs: aggregate documentation from multiple repos
+
+            Aggregated ${{ steps.aggregate.outputs.doc_count }} documents.
+          branch: docs/aggregate-${{ github.run_number }}
+          title: "docs: Aggregated documentation update"
+          body: |
+            ## Documentation Aggregation
+
+            This PR contains aggregated documentation from multiple repositories.
+
+            ### Summary
+            - **Documents**: ${{ steps.aggregate.outputs.doc_count }}
+            - **Sources**: ${{ steps.config.outputs.repos }}
+            - **Sections**: ${{ steps.config.outputs.sections }}
+
+            ### Review Checklist
+            - [ ] Verify INDEX.md is correct
+            - [ ] Check for broken cross-references
+            - [ ] Confirm no duplicate content
+            - [ ] Review conflict resolutions
+
+            ---
+            *Auto-generated by DocFlow Aggregator*
+          labels: |
+            documentation
+            automated
+
+      - name: Upload Aggregated Documentation
+        if: steps.aggregate.outputs.success == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregated-docs-${{ github.run_number }}
+          path: ${{ steps.config.outputs.output }}
+          retention-days: 30
+
+  notify:
+    name: "Notify on Failure"
+    runs-on: ubuntu-latest
+    needs: aggregate-docs
+    if: failure()
+    steps:
+      - name: Create Issue on Failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🔴 Documentation Aggregation Failed';
+            const body = `
+            ## Documentation Aggregation Failure
+
+            The scheduled documentation aggregation workflow failed.
+
+            **Workflow Run**: ${context.payload.repository.html_url}/actions/runs/${context.runId}
+            **Triggered**: ${context.eventName}
+            **Branch**: ${context.ref}
+
+            ### Action Required
+            1. Review the workflow logs for errors
+            2. Check repository access and permissions
+            3. Verify docflow.config.json aggregate settings
+            4. Ensure source repositories are accessible
+
+            ### Common Issues
+            - Repository authentication failures
+            - Missing or inaccessible source repos
+            - Invalid aggregate configuration
+            - Network or API rate limits
+
+            ---
+            *Auto-generated by DocFlow*
+            `;
+
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'automation,documentation,bug'
+            });
+
+            const existingIssue = issues.data.find(issue =>
+              issue.title.includes('Documentation Aggregation Failed')
+            );
+
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['automation', 'documentation', 'bug']
+              });
+            }

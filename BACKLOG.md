@@ -492,7 +492,7 @@ docflow.schema.json @TomsTech
 
 ### 9. Mermaid Diagram Generation from Code
 
-**Status**: `TODO`
+**Status**: `DONE`
 **Effort**: 6-8 hours
 **Impact**: Auto-generated architecture diagrams, always up-to-date
 
@@ -563,7 +563,7 @@ docflow.schema.json @TomsTech
 
 ### 10. VS Code Extension
 
-**Status**: `TODO`
+**Status**: `TODO` (Requires separate repository)
 **Effort**: 2-3 weeks
 **Impact**: IDE integration, snippets, one-click scaffolding
 
@@ -624,7 +624,7 @@ docflow.schema.json @TomsTech
 
 ### 11. GitHub App for Auto-Documentation PRs
 
-**Status**: `TODO`
+**Status**: `TODO` (Requires separate repository and hosting)
 **Effort**: 2-3 weeks
 **Impact**: Fully automated documentation, zero maintenance
 
@@ -673,7 +673,7 @@ docflow.schema.json @TomsTech
 
 ### 12. Multi-Repo Documentation Aggregation
 
-**Status**: `TODO`
+**Status**: `DONE`
 **Effort**: 3-4 weeks
 **Impact**: Monorepo support, organisation-wide docs
 
@@ -733,21 +733,31 @@ docflow.schema.json @TomsTech
 
 ### 13. Documentation Site Generator
 
+**Status**: `DONE`
+
 Generate a static site from all documentation using Docusaurus/VitePress.
 
 ### 14. AI-Powered Documentation Review
+
+**Status**: `TODO` (Requires API integration)
 
 Use Claude API to review and suggest improvements to documentation.
 
 ### 15. Documentation Coverage Metrics
 
+**Status**: `DONE`
+
 Track what percentage of code/APIs have documentation.
 
 ### 16. Internationalization Support
 
+**Status**: `TODO`
+
 Generate documentation in multiple languages.
 
 ### 17. PDF Report Generation
+
+**Status**: `DONE`
 
 Generate comprehensive PDF reports from all documentation.
 
@@ -761,3 +771,4 @@ Generate comprehensive PDF reports from all documentation.
 | 2024-12-08 | Completed P0 items: JSON Schema, SECURITY.md, Dependabot, CODEOWNERS, PR Template |
 | 2024-12-08 | Completed P1 items: CLI Tool, Auto-Detection, CLAUDE.md Generator |
 | 2024-12-08 | Bonus: Added GitHub Issue Templates |
+| 2024-12-08 | Completed P2/P3: Mermaid diagrams, Coverage metrics, PDF export, Multi-repo aggregation, Site generator |

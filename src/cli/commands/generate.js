@@ -11,12 +11,19 @@ import { join } from 'path';
 import { glob } from 'glob';
 import { loadConfig } from '../utils/config.js';
 import { detectProjectType, detectTechStack, detectFrameworks } from '../utils/detect.js';
+import { generateERD, saveERD } from '../../generators/erd.js';
+import { generateDependencyGraph, saveDependencyGraph } from '../../generators/dependency-graph.js';
+import { generateAllWorkflowDiagrams, saveWorkflowDiagrams } from '../../generators/workflow-diagram.js';
 
 export const generateCommand = new Command('generate')
   .description('Generate documentation')
-  .argument('[type]', 'What to generate (claude, readme, all)', 'all')
+  .argument('[type]', 'What to generate (claude, readme, diagrams, all)', 'all')
   .option('-o, --output <path>', 'Output path')
   .option('-f, --force', 'Overwrite existing files')
+  .option('--format <format>', 'Output format (markdown, separate)', 'markdown')
+  .option('--diagram-type <type>', 'Diagram type (erd, dependencies, workflows, all)', 'all')
+  .option('--entry <files...>', 'Entry points for dependency graph')
+  .option('--max-depth <depth>', 'Maximum depth for dependency graph', '5')
   .action(async (type, options) => {
     console.log(chalk.cyan(`\n  DocFlow Generate: ${type}\n`));
 
@@ -26,7 +33,7 @@ export const generateCommand = new Command('generate')
     try {
       const config = await loadConfig(cwd);
 
-      if (!config && type !== 'claude') {
+      if (!config && type !== 'claude' && type !== 'diagrams') {
         spinner.fail('No docflow.config.json found. Run `docflow init` first.');
         process.exit(1);
       }
@@ -43,6 +50,10 @@ export const generateCommand = new Command('generate')
         spinner.start('Updating README.md...');
         // README generation would go here
         spinner.succeed('README.md is up to date');
+      }
+
+      if (type === 'diagrams' || type === 'all') {
+        await generateDiagrams(cwd, options, spinner);
       }
 
       console.log(chalk.green('\n  Generation complete!\n'));
@@ -235,4 +246,68 @@ function getCommonCommands(projectType, techStack) {
   );
 
   return commands;
+}
+
+async function generateDiagrams(cwd, options, spinner) {
+  const diagramType = options.diagramType || 'all';
+  const format = options.format || 'markdown';
+  const docsDir = join(cwd, 'docs', 'diagrams');
+
+  await fse.ensureDir(docsDir);
+
+  // Generate ERD
+  if (diagramType === 'erd' || diagramType === 'all') {
+    try {
+      spinner.start('Generating Entity Relationship Diagram...');
+      const result = await generateERD(cwd, {
+        format,
+        output: options.output || join(docsDir, 'erd.md')
+      });
+
+      const outputPath = options.output || join(docsDir, 'erd.md');
+      await saveERD(result, outputPath, format);
+
+      spinner.succeed(`Generated ERD (${result.diagrams.length} diagram(s))`);
+    } catch (error) {
+      spinner.warn(`ERD generation skipped: ${error.message}`);
+    }
+  }
+
+  // Generate Dependency Graph
+  if (diagramType === 'dependencies' || diagramType === 'all') {
+    try {
+      spinner.start('Generating Dependency Graph...');
+      const result = await generateDependencyGraph(cwd, {
+        entryPoints: options.entry,
+        maxDepth: parseInt(options.maxDepth, 10),
+        format,
+        output: options.output || join(docsDir, 'dependencies.md')
+      });
+
+      const outputPath = options.output || join(docsDir, 'dependencies.md');
+      await saveDependencyGraph(result, outputPath, format);
+
+      spinner.succeed(`Generated Dependency Graph (${result.graph.nodes.size} modules)`);
+    } catch (error) {
+      spinner.warn(`Dependency graph generation skipped: ${error.message}`);
+    }
+  }
+
+  // Generate Workflow Diagrams
+  if (diagramType === 'workflows' || diagramType === 'all') {
+    try {
+      spinner.start('Generating Workflow Diagrams...');
+      const result = await generateAllWorkflowDiagrams(cwd, {
+        format,
+        output: options.output || join(docsDir, 'workflows.md')
+      });
+
+      const outputPath = options.output || join(docsDir, 'workflows.md');
+      await saveWorkflowDiagrams(result, outputPath, format);
+
+      spinner.succeed(`Generated Workflow Diagrams (${result.diagrams.length} workflow(s))`);
+    } catch (error) {
+      spinner.warn(`Workflow diagram generation skipped: ${error.message}`);
+    }
+  }
 }

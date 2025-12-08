@@ -16,6 +16,10 @@ import { scaffoldCommand } from './commands/scaffold.js';
 import { addCommand } from './commands/add.js';
 import { validateCommand } from './commands/validate.js';
 import { generateCommand } from './commands/generate.js';
+import { aggregateCommand } from './commands/aggregate.js';
+import { exportCommand } from './commands/export.js';
+import { coverageCommand } from './commands/coverage.js';
+import { siteCommand } from './commands/site.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -45,6 +49,10 @@ program.addCommand(scaffoldCommand);
 program.addCommand(addCommand);
 program.addCommand(validateCommand);
 program.addCommand(generateCommand);
+program.addCommand(aggregateCommand);
+program.addCommand(exportCommand);
+program.addCommand(siteCommand);
+program.addCommand(coverageCommand);
 
 // Parse arguments
 program.parse(process.argv);

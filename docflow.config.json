@@ -408,5 +408,15 @@
         "automatic": false
       }
     }
+  },
+
+  "aggregate": {
+    "enabled": false,
+    "repos": [],
+    "output": "docs/aggregated",
+    "sections": ["adr", "api", "runbooks"],
+    "schedule": "weekly",
+    "conflictResolution": "prefix",
+    "cloneDepth": 1
   }
 }

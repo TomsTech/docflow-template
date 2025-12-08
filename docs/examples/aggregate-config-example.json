@@ -1,0 +1,52 @@
+{
+  "$schema": "../../docflow.schema.json",
+  "version": "1.0.0",
+
+  "project": {
+    "name": "Multi-Repo Documentation Hub",
+    "description": "Aggregated documentation from microservices ecosystem",
+    "type": "node",
+    "language": "Australian English",
+    "owner": "myorg",
+    "repository": "docs-hub"
+  },
+
+  "aggregate": {
+    "enabled": true,
+    "repos": [
+      "myorg/auth-service",
+      "myorg/user-service",
+      "myorg/order-service",
+      "myorg/payment-service",
+      "myorg/notification-service",
+      "myorg/analytics-service"
+    ],
+    "output": "docs/aggregated",
+    "sections": [
+      "adr",
+      "api",
+      "runbooks",
+      "architecture"
+    ],
+    "schedule": "weekly",
+    "conflictResolution": "prefix",
+    "cloneDepth": 1
+  },
+
+  "documentation": {
+    "output": {
+      "directory": "docs/generated",
+      "formats": ["markdown", "pdf"],
+      "indexFile": "INDEX.md"
+    },
+    "dataDictionary": {
+      "enabled": true,
+      "output": "docs/DATA_DICTIONARY.md"
+    }
+  },
+
+  "cicd": {
+    "provider": "github",
+    "environments": ["dev", "staging", "production"]
+  }
+}

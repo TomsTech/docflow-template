@@ -38,7 +38,10 @@
   "scripts": {
     "lint": "eslint src/",
     "test": "node --test src/**/*.test.js",
-    "docflow": "node bin/docflow.js"
+    "docflow": "node bin/docflow.js",
+    "site:dev": "vitepress dev docs",
+    "site:build": "vitepress build docs",
+    "site:preview": "vitepress preview docs"
   },
   "dependencies": {
     "chalk": "^5.3.0",
@@ -47,10 +50,20 @@
     "inquirer": "^9.2.0",
     "ora": "^8.0.0",
     "glob": "^10.3.0",
-    "ajv": "^8.12.0"
+    "ajv": "^8.12.0",
+    "marked": "^11.1.1",
+    "puppeteer": "^21.7.0"
   },
   "devDependencies": {
     "eslint": "^8.57.0"
+  },
+  "peerDependencies": {
+    "vitepress": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vitepress": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18"
