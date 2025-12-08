@@ -1,0 +1,19 @@
+# CODEOWNERS - Define code ownership for automatic PR review requests
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @thmangano
+
+# Workflows require owner approval
+.github/workflows/ @thmangano
+
+# Documentation templates
+docs/templates/ @thmangano
+
+# Configuration files
+docflow.config.json @thmangano
+docflow.schema.json @thmangano
+
+# Security-sensitive files
+SECURITY.md @thmangano
+LICENSE @thmangano

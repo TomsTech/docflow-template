@@ -33,9 +33,8 @@ $ErrorActionPreference = "Stop"
 $DocFlowRoot = Split-Path -Parent $PSScriptRoot
 
 Write-Host ""
-Write-Host "╔═══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                    DocFlow Installer                          ║" -ForegroundColor Cyan
-Write-Host "╚═══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "DocFlow Installer" -ForegroundColor Cyan
+Write-Host "=================" -ForegroundColor Cyan
 Write-Host ""
 
 # Validate target path
@@ -191,9 +190,9 @@ foreach ($folder in $githubFolders) {
 }
 
 Write-Host ""
-Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "  DocFlow installed successfully!" -ForegroundColor Green
-Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "=================" -ForegroundColor Green
+Write-Host "DocFlow installed successfully!" -ForegroundColor Green
+Write-Host "=================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Review docflow.config.json" -ForegroundColor White
