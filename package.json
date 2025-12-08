@@ -1,0 +1,16 @@
+{
+  "name": "docflow-template",
+  "version": "1.0.0",
+  "description": "Enterprise Documentation & CI/CD Template System",
+  "private": true,
+  "author": "Tom Mangano (TomsTech)",
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "lint": "echo 'No linting configured'",
+    "test": "echo 'No tests configured'"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18"
+  }
+}
