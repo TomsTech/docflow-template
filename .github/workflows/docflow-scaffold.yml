@@ -1,0 +1,307 @@
+# DocFlow Documentation Scaffolding Workflow
+# Creates enterprise documentation structure from templates
+# Inspired by Arete TOGAF-aligned documentation patterns
+
+name: DocFlow Scaffold
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Project name for template variables'
+        required: true
+        type: string
+      project_description:
+        description: 'Project description'
+        required: false
+        type: string
+        default: ''
+      scaffold_type:
+        description: 'What to scaffold'
+        required: true
+        type: choice
+        options:
+          - full          # All documentation folders
+          - architecture  # Architecture + ADR only
+          - api           # API documentation only
+          - security      # Security documentation only
+          - runbooks      # Runbooks only
+          - minimal       # Just README structure
+      overwrite:
+        description: 'Overwrite existing files'
+        required: false
+        type: boolean
+        default: false
+      create_pr:
+        description: 'Create PR instead of direct commit'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  PROJECT_NAME: ${{ inputs.project_name }}
+  PROJECT_DESCRIPTION: ${{ inputs.project_description }}
+  SCAFFOLD_TYPE: ${{ inputs.scaffold_type }}
+  OVERWRITE: ${{ inputs.overwrite }}
+
+jobs:
+  scaffold:
+    name: Scaffold Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set variables
+        id: vars
+        run: |
+          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "branch=docs/scaffold-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+          echo "author=$(git config user.name || echo 'DocFlow Bot')" >> $GITHUB_OUTPUT
+
+      - name: Create branch for PR
+        if: inputs.create_pr
+        run: |
+          git checkout -b "${{ steps.vars.outputs.branch }}"
+
+      - name: Download DocFlow templates
+        run: |
+          # Create temp directory for templates
+          mkdir -p .docflow-templates
+
+          # Download templates from docflow-template repo
+          TEMPLATES=(
+            "docs/templates/README.md"
+            "docs/templates/adr/ADR-000-TEMPLATE.md"
+            "docs/templates/api/ENDPOINT-TEMPLATE.md"
+            "docs/templates/architecture/README.md"
+            "docs/templates/database/TABLE-TEMPLATE.md"
+            "docs/templates/deployment/README.md"
+            "docs/templates/features/FEATURE-TEMPLATE.md"
+            "docs/templates/runbooks/RB-000-TEMPLATE.md"
+            "docs/templates/security/README.md"
+          )
+
+          for template in "${TEMPLATES[@]}"; do
+            dir=$(dirname ".docflow-templates/$template")
+            mkdir -p "$dir"
+            curl -sL "https://raw.githubusercontent.com/TomsTech/docflow-template/main/$template" \
+              -o ".docflow-templates/$template" 2>/dev/null || echo "Template $template not found, using placeholder"
+          done
+
+      - name: Replace template variables
+        run: |
+          # Function to replace variables in templates
+          replace_vars() {
+            local file="$1"
+            if [ -f "$file" ]; then
+              sed -i "s/{{PROJECT_NAME}}/$PROJECT_NAME/g" "$file"
+              sed -i "s/{{PROJECT_DESCRIPTION}}/$PROJECT_DESCRIPTION/g" "$file"
+              sed -i "s/{{DATE}}/${{ steps.vars.outputs.date }}/g" "$file"
+              sed -i "s/{{AUTHOR}}/${{ steps.vars.outputs.author }}/g" "$file"
+              sed -i "s/{{GITHUB_OWNER}}/${{ github.repository_owner }}/g" "$file"
+              sed -i "s/{{GITHUB_REPO}}/${{ github.event.repository.name }}/g" "$file"
+            fi
+          }
+
+          export -f replace_vars
+          find .docflow-templates -name "*.md" -exec bash -c 'replace_vars "$0"' {} \;
+
+      - name: Scaffold full documentation
+        if: inputs.scaffold_type == 'full'
+        run: |
+          # Create full documentation structure
+          DIRS=(
+            "docs"
+            "docs/api"
+            "docs/architecture"
+            "docs/architecture/adr"
+            "docs/database"
+            "docs/deployment"
+            "docs/features"
+            "docs/runbooks"
+            "docs/security"
+            "docs/diagrams"
+            "docs/integrations"
+          )
+
+          for dir in "${DIRS[@]}"; do
+            mkdir -p "$dir"
+          done
+
+          # Copy templates (respecting overwrite setting)
+          copy_if_allowed() {
+            local src="$1"
+            local dest="$2"
+            if [ "$OVERWRITE" = "true" ] || [ ! -f "$dest" ]; then
+              cp "$src" "$dest" 2>/dev/null || true
+              echo "Created: $dest"
+            else
+              echo "Skipped (exists): $dest"
+            fi
+          }
+
+          copy_if_allowed ".docflow-templates/docs/templates/README.md" "docs/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/api/ENDPOINT-TEMPLATE.md" "docs/api/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/architecture/README.md" "docs/architecture/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/adr/ADR-000-TEMPLATE.md" "docs/architecture/adr/ADR-000-TEMPLATE.md"
+          copy_if_allowed ".docflow-templates/docs/templates/database/TABLE-TEMPLATE.md" "docs/database/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/deployment/README.md" "docs/deployment/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/features/FEATURE-TEMPLATE.md" "docs/features/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/runbooks/RB-000-TEMPLATE.md" "docs/runbooks/README.md"
+          copy_if_allowed ".docflow-templates/docs/templates/security/README.md" "docs/security/README.md"
+
+          # Create index file
+          cat > docs/INDEX.md << 'INDEXEOF'
+          # Documentation Index
+
+          > Enterprise documentation for ${{ inputs.project_name }}
+
+          ## Quick Links
+
+          | Section | Description |
+          |---------|-------------|
+          | [Architecture](./architecture/README.md) | System design, C4 diagrams, ADRs |
+          | [API](./api/README.md) | API endpoints and reference |
+          | [Database](./database/README.md) | Schema documentation |
+          | [Deployment](./deployment/README.md) | Infrastructure and CI/CD |
+          | [Features](./features/README.md) | Feature specifications |
+          | [Runbooks](./runbooks/README.md) | Operational procedures |
+          | [Security](./security/README.md) | Security architecture |
+
+          ## Architecture Decision Records
+
+          | ADR | Title | Status |
+          |-----|-------|--------|
+          | [ADR-000](./architecture/adr/ADR-000-TEMPLATE.md) | Template | - |
+
+          ---
+
+          Generated by [DocFlow](https://github.com/TomsTech/docflow-template) on ${{ steps.vars.outputs.date }}
+          INDEXEOF
+
+      - name: Scaffold architecture only
+        if: inputs.scaffold_type == 'architecture'
+        run: |
+          mkdir -p docs/architecture/adr
+
+          if [ "$OVERWRITE" = "true" ] || [ ! -f "docs/architecture/README.md" ]; then
+            cp ".docflow-templates/docs/templates/architecture/README.md" "docs/architecture/README.md" 2>/dev/null || true
+          fi
+
+          if [ "$OVERWRITE" = "true" ] || [ ! -f "docs/architecture/adr/ADR-000-TEMPLATE.md" ]; then
+            cp ".docflow-templates/docs/templates/adr/ADR-000-TEMPLATE.md" "docs/architecture/adr/ADR-000-TEMPLATE.md" 2>/dev/null || true
+          fi
+
+      - name: Scaffold API only
+        if: inputs.scaffold_type == 'api'
+        run: |
+          mkdir -p docs/api
+
+          if [ "$OVERWRITE" = "true" ] || [ ! -f "docs/api/README.md" ]; then
+            cp ".docflow-templates/docs/templates/api/ENDPOINT-TEMPLATE.md" "docs/api/README.md" 2>/dev/null || true
+          fi
+
+      - name: Scaffold security only
+        if: inputs.scaffold_type == 'security'
+        run: |
+          mkdir -p docs/security
+
+          if [ "$OVERWRITE" = "true" ] || [ ! -f "docs/security/README.md" ]; then
+            cp ".docflow-templates/docs/templates/security/README.md" "docs/security/README.md" 2>/dev/null || true
+          fi
+
+      - name: Scaffold runbooks only
+        if: inputs.scaffold_type == 'runbooks'
+        run: |
+          mkdir -p docs/runbooks
+
+          if [ "$OVERWRITE" = "true" ] || [ ! -f "docs/runbooks/README.md" ]; then
+            cp ".docflow-templates/docs/templates/runbooks/RB-000-TEMPLATE.md" "docs/runbooks/README.md" 2>/dev/null || true
+          fi
+
+      - name: Scaffold minimal
+        if: inputs.scaffold_type == 'minimal'
+        run: |
+          mkdir -p docs
+
+          if [ "$OVERWRITE" = "true" ] || [ ! -f "docs/README.md" ]; then
+            cp ".docflow-templates/docs/templates/README.md" "docs/README.md" 2>/dev/null || true
+          fi
+
+      - name: Clean up templates
+        run: |
+          rm -rf .docflow-templates
+
+      - name: Generate summary
+        run: |
+          echo "## Documentation Scaffold Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Project | ${{ inputs.project_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scaffold Type | ${{ inputs.scaffold_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Overwrite | ${{ inputs.overwrite }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Date | ${{ steps.vars.outputs.date }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Files Created" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          find docs -type f -name "*.md" 2>/dev/null | sort >> $GITHUB_STEP_SUMMARY || echo "No files found"
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit changes
+        run: |
+          git config user.name "DocFlow Bot"
+          git config user.email "docflow@example.com"
+          git add docs/
+          git commit -m "docs: scaffold ${{ inputs.scaffold_type }} documentation structure
+
+          Project: ${{ inputs.project_name }}
+          Type: ${{ inputs.scaffold_type }}
+          Overwrite: ${{ inputs.overwrite }}
+
+          Generated by DocFlow Scaffold workflow" || echo "No changes to commit"
+
+      - name: Push and create PR
+        if: inputs.create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin "${{ steps.vars.outputs.branch }}" || exit 0
+
+          gh pr create \
+            --title "docs: Add ${{ inputs.scaffold_type }} documentation scaffold" \
+            --body "## Documentation Scaffold
+
+          This PR adds enterprise documentation structure using DocFlow templates.
+
+          ### Configuration
+          - **Project**: ${{ inputs.project_name }}
+          - **Scaffold Type**: ${{ inputs.scaffold_type }}
+          - **Overwrite Existing**: ${{ inputs.overwrite }}
+
+          ### What's Included
+          $(find docs -type f -name '*.md' 2>/dev/null | sed 's/^/- /' || echo '- Documentation files')
+
+          ### Next Steps
+          1. Review the generated documentation structure
+          2. Fill in the template placeholders with your project details
+          3. Add Architecture Decision Records (ADRs) as needed
+          4. Create runbooks for operational procedures
+
+          ---
+          Generated by [DocFlow](https://github.com/TomsTech/docflow-template)" \
+            --base main \
+            --head "${{ steps.vars.outputs.branch }}" || echo "PR creation skipped or failed"
+
+      - name: Push directly
+        if: "!inputs.create_pr"
+        run: |
+          git push origin main || echo "Push failed or no changes"

@@ -117,6 +117,111 @@
     }
   },
 
+  "templates": {
+    "scaffold": {
+      "enabled": true,
+      "onInit": true,
+      "structure": {
+        "docs/": {
+          "README.md": "docs/templates/README.md",
+          "api/": {
+            "README.md": "docs/templates/api/ENDPOINT-TEMPLATE.md"
+          },
+          "architecture/": {
+            "README.md": "docs/templates/architecture/README.md",
+            "adr/": {
+              "README.md": "docs/templates/adr/ADR-000-TEMPLATE.md"
+            }
+          },
+          "database/": {
+            "README.md": "docs/templates/database/TABLE-TEMPLATE.md"
+          },
+          "deployment/": {
+            "README.md": "docs/templates/deployment/README.md"
+          },
+          "features/": {
+            "README.md": "docs/templates/features/FEATURE-TEMPLATE.md"
+          },
+          "runbooks/": {
+            "README.md": "docs/templates/runbooks/RB-000-TEMPLATE.md"
+          },
+          "security/": {
+            "README.md": "docs/templates/security/README.md"
+          }
+        }
+      }
+    },
+    "adr": {
+      "enabled": true,
+      "directory": "docs/architecture/adr",
+      "template": "docs/templates/adr/ADR-000-TEMPLATE.md",
+      "prefix": "ADR",
+      "autoNumber": true
+    },
+    "runbooks": {
+      "enabled": true,
+      "directory": "docs/runbooks",
+      "template": "docs/templates/runbooks/RB-000-TEMPLATE.md",
+      "prefix": "RB",
+      "autoNumber": true,
+      "categories": ["incident", "deployment", "maintenance", "recovery"]
+    },
+    "features": {
+      "enabled": true,
+      "directory": "docs/features",
+      "template": "docs/templates/features/FEATURE-TEMPLATE.md",
+      "linkToAdr": true
+    },
+    "api": {
+      "enabled": true,
+      "directory": "docs/api",
+      "template": "docs/templates/api/ENDPOINT-TEMPLATE.md",
+      "groupBy": "resource"
+    },
+    "database": {
+      "enabled": true,
+      "directory": "docs/database",
+      "template": "docs/templates/database/TABLE-TEMPLATE.md",
+      "autoGenerate": {
+        "fromPrisma": true,
+        "fromEntity": true,
+        "fromSql": true
+      }
+    },
+    "architecture": {
+      "enabled": true,
+      "directory": "docs/architecture",
+      "template": "docs/templates/architecture/README.md",
+      "diagrams": {
+        "format": "ascii",
+        "c4Model": true,
+        "dataFlow": true,
+        "deployment": true
+      }
+    },
+    "security": {
+      "enabled": true,
+      "directory": "docs/security",
+      "template": "docs/templates/security/README.md",
+      "sections": ["threatModel", "authentication", "authorisation", "dataProtection", "compliance"]
+    },
+    "deployment": {
+      "enabled": true,
+      "directory": "docs/deployment",
+      "template": "docs/templates/deployment/README.md",
+      "environments": ["development", "staging", "production"]
+    },
+    "variables": {
+      "PROJECT_NAME": "{{project.name}}",
+      "PROJECT_DESCRIPTION": "{{project.description}}",
+      "OWNER": "{{project.owner}}",
+      "REPO": "{{project.repository}}",
+      "DATE": "{{date:YYYY-MM-DD}}",
+      "AUTHOR": "{{git.user.name}}",
+      "VERSION": "{{version}}"
+    }
+  },
+
   "ai": {
     "claudeMd": {
       "generate": true,
