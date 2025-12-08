@@ -270,8 +270,19 @@ jobs:
             echo "No OpenAPI spec found"
           fi
 
+      - name: Check API URL configured
+        id: check_api
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          if [ -n "$API_URL" ]; then
+            echo "has_api_url=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_api_url=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: OWASP ZAP API Scan
-        if: steps.openapi.outputs.spec_file != '' && secrets.API_URL != ''
+        if: steps.openapi.outputs.spec_file != '' && steps.check_api.outputs.has_api_url == 'true'
         uses: zaproxy/action-api-scan@v0.7.0
         with:
           target: ${{ secrets.API_URL }}
@@ -295,11 +306,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Determine Full Scan Target
+        id: full_target
+        env:
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+          INPUT_URL: ${{ github.event.inputs.target_url }}
+        run: |
+          if [ -n "$INPUT_URL" ]; then
+            echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
+            echo "has_target=true" >> $GITHUB_OUTPUT
+          elif [ -n "$PORTAL_URL" ]; then
+            echo "url=$PORTAL_URL" >> $GITHUB_OUTPUT
+            echo "has_target=true" >> $GITHUB_OUTPUT
+          else
+            echo "url=" >> $GITHUB_OUTPUT
+            echo "has_target=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: OWASP ZAP Full Scan
-        if: github.event.inputs.target_url != '' || secrets.PORTAL_URL != ''
+        if: steps.full_target.outputs.has_target == 'true'
         uses: zaproxy/action-full-scan@v0.10.0
         with:
-          target: ${{ github.event.inputs.target_url || secrets.PORTAL_URL }}
+          target: ${{ steps.full_target.outputs.url }}
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
         continue-on-error: true
