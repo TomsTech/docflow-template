@@ -16,7 +16,20 @@ import chalk from 'chalk';
  * @returns {Promise<string[]>} Array of file paths
  */
 export async function scanCodebase(dir, options = {}) {
-  const include = options.include || ['**/*.{js,ts,py,ps1}'];
+  // Default patterns include all major language extensions
+  const defaultPatterns = [
+    '**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx',  // JavaScript/TypeScript
+    '**/*.py',                                       // Python
+    '**/*.ps1', '**/*.psm1', '**/*.psd1',           // PowerShell
+    '**/*.go',                                       // Go
+    '**/*.rs',                                       // Rust
+    '**/*.java',                                     // Java
+    '**/*.rb',                                       // Ruby
+    '**/*.php',                                      // PHP
+    '**/*.cs',                                       // C#
+  ];
+
+  const include = options.include || defaultPatterns;
   const exclude = options.exclude || [
     '**/node_modules/**',
     '**/dist/**',
@@ -24,19 +37,30 @@ export async function scanCodebase(dir, options = {}) {
     '**/.git/**',
     '**/coverage/**',
     '**/*.min.js',
-    '**/*.bundle.js'
+    '**/*.bundle.js',
+    '**/.venv/**',
+    '**/venv/**',
+    '**/__pycache__/**',
+    '**/target/**',
+    '**/vendor/**',
   ];
 
   const files = [];
 
   for (const pattern of include) {
-    const matches = await glob(pattern, {
-      cwd: dir,
-      absolute: true,
-      ignore: exclude,
-      nodir: true
-    });
-    files.push(...matches);
+    try {
+      const matches = await glob(pattern, {
+        cwd: dir,
+        absolute: true,
+        ignore: exclude,
+        nodir: true,
+        dot: false,
+        windowsPathsNoEscape: true,  // Better Windows path handling
+      });
+      files.push(...matches);
+    } catch (e) {
+      // Ignore glob errors for individual patterns
+    }
   }
 
   // Remove duplicates
