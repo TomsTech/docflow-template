@@ -8,7 +8,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import fse from 'fs-extra';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { detectProjectType } from '../utils/detect.js';
 import { copyTemplates, createConfig, createDirectories } from '../utils/scaffold.js';
 
@@ -28,7 +28,7 @@ export const initCommand = new Command('init')
     if (options.yes) {
       // Use defaults
       answers = {
-        name: options.name || fse.basename(cwd),
+        name: options.name || basename(cwd),
         description: '',
         type: options.type || detectedType,
         language: 'Australian English',
@@ -43,7 +43,7 @@ export const initCommand = new Command('init')
           type: 'input',
           name: 'name',
           message: 'Project name:',
-          default: options.name || fse.basename(cwd),
+          default: options.name || basename(cwd),
         },
         {
           type: 'input',
