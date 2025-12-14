@@ -77,6 +77,16 @@ on:
         required: false
         default: false
         type: boolean
+      deploy_target:
+        description: 'Deployment target'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - cloudflare-worker
+          - directadmin
+          - both
 
 # Prevent concurrent runs on same branch (cancel in-progress)
 concurrency:
@@ -244,8 +254,16 @@ jobs:
         run: |
           if [ -f "${{ matrix.check }}" ]; then
             echo "applicable=true" >> $GITHUB_OUTPUT
+            echo "::notice::Found ${{ matrix.check }} - ${{ matrix.lang }} tests will run"
           else
             echo "applicable=false" >> $GITHUB_OUTPUT
+            echo "========================================"
+            echo "  NO ${{ matrix.lang | tr '[:lower:]' '[:upper:]' }} PROJECT DETECTED"
+            echo "========================================"
+            echo "::warning::No ${{ matrix.check }} found - skipping ${{ matrix.lang }} tests (this is OK for templates)"
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ${{ matrix.lang }} Tests Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "No \`${{ matrix.check }}\` found in repository. This is normal for template repos." >> $GITHUB_STEP_SUMMARY
           fi
 
       # Node.js Testing
@@ -336,7 +354,25 @@ jobs:
           category: 'trivy'
         continue-on-error: true
 
+      - name: Check for scannable content
+        id: check-content
+        run: |
+          # Check if there are any dependency files to scan
+          if ls package*.json go.mod go.sum requirements*.txt Gemfile* Cargo.toml pom.xml build.gradle 2>/dev/null | head -1 > /dev/null; then
+            echo "has_deps=true" >> $GITHUB_OUTPUT
+            echo "::notice::Found dependency files - running vulnerability scan"
+          else
+            echo "has_deps=false" >> $GITHUB_OUTPUT
+            echo "========================================"
+            echo "  NO DEPENDENCIES TO SCAN"
+            echo "========================================"
+            echo "::warning::No dependency files found - this is OK for templates"
+            echo "### Trivy SCA Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "No dependency files found. Add package.json, requirements.txt, go.mod, etc. to enable scanning." >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Run Trivy (table output for logs)
+        if: steps.check-content.outputs.has_deps == 'true'
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
@@ -385,7 +421,26 @@ jobs:
           category: 'semgrep'
         continue-on-error: true
 
+      - name: Check for source code
+        id: check-code
+        run: |
+          # Check if there's actual source code to scan
+          CODE_FILES=$(find . -type f \( -name "*.js" -o -name "*.ts" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.php" -o -name "*.rb" \) -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -5 | wc -l)
+          if [ "$CODE_FILES" -gt 0 ]; then
+            echo "has_code=true" >> $GITHUB_OUTPUT
+            echo "::notice::Found source code files - running SAST scan"
+          else
+            echo "has_code=false" >> $GITHUB_OUTPUT
+            echo "========================================"
+            echo "  NO SOURCE CODE TO SCAN"
+            echo "========================================"
+            echo "::warning::No source code files found - this is OK for templates"
+            echo "### Semgrep SAST Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "No source code files found. Add .js, .ts, .py, .go files to enable security scanning." >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Run Semgrep (strict mode for gate)
+        if: steps.check-code.outputs.has_code == 'true'
         run: |
           semgrep scan \
             --config=p/default \
@@ -597,3 +652,126 @@ jobs:
             out/
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Deploy to Cloudflare Worker (optional)
+  # ---------------------------------------------------------------------------
+  deploy-cloudflare:
+    name: "Deploy (Cloudflare Worker)"
+    needs: [quality-gate, build]
+    if: |
+      needs.quality-gate.outputs.passed == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event.inputs.deploy_target == 'cloudflare-worker' || github.event.inputs.deploy_target == 'both')
+    runs-on: ubuntu-latest
+    environment: cloudflare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: dist/
+        continue-on-error: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy to Cloudflare Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "========================================"
+          echo "  DEPLOYING TO CLOUDFLARE WORKER"
+          echo "========================================"
+
+          if [ -f "wrangler.toml" ]; then
+            wrangler deploy
+            echo "::notice::Successfully deployed to Cloudflare Worker"
+          else
+            echo "::error::No wrangler.toml found - cannot deploy to Cloudflare"
+            exit 1
+          fi
+
+      - name: Deployment Summary
+        run: |
+          echo "## Cloudflare Worker Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "Deployed from branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ---------------------------------------------------------------------------
+  # Deploy to DirectAdmin (optional)
+  # ---------------------------------------------------------------------------
+  deploy-directadmin:
+    name: "Deploy (DirectAdmin)"
+    needs: [quality-gate, build]
+    if: |
+      needs.quality-gate.outputs.passed == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event.inputs.deploy_target == 'directadmin' || github.event.inputs.deploy_target == 'both')
+    runs-on: ubuntu-latest
+    environment: directadmin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: dist/
+        continue-on-error: true
+
+      - name: Deploy via SFTP/SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DIRECTADMIN_HOST }}
+          DEPLOY_USER: ${{ secrets.DIRECTADMIN_USER }}
+          DEPLOY_KEY: ${{ secrets.DIRECTADMIN_SSH_KEY }}
+          DEPLOY_PATH: ${{ secrets.DIRECTADMIN_PATH }}
+        run: |
+          echo "========================================"
+          echo "  DEPLOYING TO DIRECTADMIN"
+          echo "========================================"
+
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Deploy files
+          if [ -d "dist" ]; then
+            DEPLOY_SOURCE="dist/"
+          elif [ -d "build" ]; then
+            DEPLOY_SOURCE="build/"
+          elif [ -d "public" ]; then
+            DEPLOY_SOURCE="public/"
+          else
+            DEPLOY_SOURCE="./"
+          fi
+
+          echo "Deploying $DEPLOY_SOURCE to $DEPLOY_HOST:$DEPLOY_PATH"
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            "$DEPLOY_SOURCE" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH"
+
+          echo "::notice::Successfully deployed to DirectAdmin server"
+
+          # Cleanup
+          rm -f ~/.ssh/deploy_key
+
+      - name: Deployment Summary
+        run: |
+          echo "## DirectAdmin Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "Deployed from branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Target: \`${{ secrets.DIRECTADMIN_HOST }}\`" >> $GITHUB_STEP_SUMMARY

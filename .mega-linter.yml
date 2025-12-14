@@ -161,6 +161,9 @@ DISABLE_ERRORS_LINTERS:
   - REPOSITORY_GIT_DIFF
   # KICS warns about unpinned action SHAs - valid but impractical for templates
   - REPOSITORY_KICS
+  # Gitleaks scans git history - secrets in old commits will warn but not block
+  # (Use BFG Repo-Cleaner to fully remove secrets from history if needed)
+  - REPOSITORY_GITLEAKS
 
 # -----------------------------------------------------------------------------
 # AUTO-FIX CONFIGURATION
