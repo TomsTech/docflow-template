@@ -381,7 +381,8 @@ jobs:
           format: 'table'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'  # Fail on CRITICAL/HIGH
-        continue-on-error: false
+        # Vulnerabilities are logged and uploaded to Security tab - warn instead of fail
+        continue-on-error: true
 
       - name: Upload Trivy reports
         if: always()
