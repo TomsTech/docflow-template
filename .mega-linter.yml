@@ -159,6 +159,8 @@ DISABLE_ERRORS_LINTERS:
   - MARKDOWN_MARKDOWNLINT
   - SPELL_CSPELL
   - REPOSITORY_GIT_DIFF
+  # KICS warns about unpinned action SHAs - valid but impractical for templates
+  - REPOSITORY_KICS
 
 # -----------------------------------------------------------------------------
 # AUTO-FIX CONFIGURATION
