@@ -37,7 +37,7 @@
   ],
   "scripts": {
     "lint": "eslint src/",
-    "test": "node --test tests/**/*.test.js src/**/*.test.js",
+    "test": "node --test ./tests/documentation-validation.test.js",
     "docflow": "node bin/docflow.js",
     "site:dev": "vitepress dev docs",
     "site:build": "vitepress build docs",

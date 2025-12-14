@@ -279,7 +279,7 @@ jobs:
         if: steps.check.outputs.applicable == 'true' && matrix.lang == 'node'
         run: |
           npm ci
-          npm test -- --coverage --coverageReporters=text --coverageReporters=lcov || npm test
+          npm test
         continue-on-error: false
 
       # Python Testing
