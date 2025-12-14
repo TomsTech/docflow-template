@@ -1,0 +1,140 @@
+# =============================================================================
+# Semgrep Ignore File
+# =============================================================================
+# Patterns for files/directories Semgrep should skip
+# Documentation: https://semgrep.dev/docs/ignoring-files-folders-code
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# DEPENDENCIES & GENERATED CODE
+# -----------------------------------------------------------------------------
+node_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+build/
+out/
+target/
+bin/
+obj/
+
+# Generated code
+*.generated.*
+*.g.cs
+*.g.ts
+*_generated.go
+
+# Lock files (scanned by Trivy for vulnerabilities instead)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Pipfile.lock
+poetry.lock
+go.sum
+Cargo.lock
+composer.lock
+Gemfile.lock
+
+# -----------------------------------------------------------------------------
+# TEST & MOCK DATA
+# -----------------------------------------------------------------------------
+**/test/**
+**/tests/**
+**/__tests__/**
+**/spec/**
+**/*.test.*
+**/*.spec.*
+**/fixtures/**
+**/testdata/**
+**/mock/**
+**/mocks/**
+
+# Test configuration
+jest.config.*
+vitest.config.*
+pytest.ini
+conftest.py
+.nycrc*
+
+# -----------------------------------------------------------------------------
+# DOCUMENTATION & ASSETS
+# -----------------------------------------------------------------------------
+docs/
+*.md
+*.rst
+*.txt
+LICENSE*
+CHANGELOG*
+CONTRIBUTING*
+
+# Static assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.woff*
+*.ttf
+*.eot
+
+# -----------------------------------------------------------------------------
+# CONFIGURATION & TOOLING
+# -----------------------------------------------------------------------------
+.git/
+.github/
+.vscode/
+.idea/
+*.code-workspace
+
+# CI/CD configs (low risk, high noise)
+.circleci/
+.travis.yml
+azure-pipelines.yml
+Jenkinsfile
+
+# Tool configs
+.eslintrc*
+.prettierrc*
+.stylelintrc*
+tsconfig*.json
+babel.config.*
+webpack.config.*
+rollup.config.*
+vite.config.*
+
+# Docker (scanned by Trivy instead)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Terraform (scanned by Checkov/tfsec instead)
+*.tf
+*.tfvars
+
+# -----------------------------------------------------------------------------
+# MINIFIED & BUNDLED CODE
+# -----------------------------------------------------------------------------
+*.min.js
+*.min.css
+*.bundle.js
+*.chunk.js
+
+# Source maps
+*.map
+
+# -----------------------------------------------------------------------------
+# PROJECT-SPECIFIC EXCLUSIONS
+# -----------------------------------------------------------------------------
+# Add your project-specific exclusions below
+
+# Example: Exclude legacy code directory
+# legacy/
+
+# Example: Exclude third-party code you don't control
+# third_party/

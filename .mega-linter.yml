@@ -1,0 +1,173 @@
+# =============================================================================
+# Mega-Linter Configuration
+# =============================================================================
+# Documentation: https://megalinter.io/latest/configuration/
+#
+# WHY MEGA-LINTER?
+# - Aggregates 50+ linters into one tool
+# - Better customisation than Super-Linter
+# - Faster execution with parallel processing
+# - Auto-fix capabilities
+# - Comprehensive reporting
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# GENERAL CONFIGURATION
+# -----------------------------------------------------------------------------
+
+# Apply linter fixes automatically (set to true for auto-fix PRs)
+APPLY_FIXES: false
+
+# Comma-separated list of files to exclude
+EXCLUDED_DIRECTORIES:
+  - node_modules
+  - vendor
+  - .git
+  - dist
+  - build
+  - coverage
+  - .venv
+  - __pycache__
+  - .terraform
+
+# File extensions to exclude
+# FILTER_REGEX_EXCLUDE: '(\.min\.js|\.min\.css|package-lock\.json|yarn\.lock)'
+
+# -----------------------------------------------------------------------------
+# LINTER SELECTION
+# -----------------------------------------------------------------------------
+# Choose which linters to enable/disable
+# ENABLE_LINTERS: Explicitly enable only these linters
+# DISABLE_LINTERS: Disable specific linters (all others enabled)
+
+# Recommended: Start with DISABLE_LINTERS to exclude noisy/irrelevant linters
+DISABLE_LINTERS:
+  # Disable spell checkers (often too noisy for technical projects)
+  - SPELL_CSPELL
+  - SPELL_MISSPELL
+  - SPELL_PROSELINT
+
+  # Disable license checkers unless needed
+  - REPOSITORY_CHECKOV
+  - REPOSITORY_TRIVY  # We use standalone Trivy in security workflow
+
+  # Disable copypaste detection (can be noisy)
+  - COPYPASTE_JSCPD
+
+  # Disable formatters if you prefer standalone tools
+  # - JAVASCRIPT_PRETTIER
+  # - TYPESCRIPT_PRETTIER
+
+# -----------------------------------------------------------------------------
+# LANGUAGE-SPECIFIC CONFIGURATION
+# -----------------------------------------------------------------------------
+
+# JavaScript/TypeScript
+JAVASCRIPT_ES_RULES_PATH: .eslintrc.json
+TYPESCRIPT_ES_RULES_PATH: .eslintrc.json
+
+# Python
+PYTHON_PYLINT_CONFIG_FILE: pyproject.toml
+PYTHON_BLACK_CONFIG_FILE: pyproject.toml
+PYTHON_ISORT_CONFIG_FILE: pyproject.toml
+PYTHON_MYPY_CONFIG_FILE: pyproject.toml
+
+# Go
+GO_GOLANGCI_LINT_CONFIG_FILE: .golangci.yml
+
+# PowerShell
+POWERSHELL_POWERSHELL_CONFIG_FILE: PSScriptAnalyzerSettings.psd1
+
+# Markdown
+MARKDOWN_MARKDOWNLINT_CONFIG_FILE: .markdownlint.json
+MARKDOWN_MARKDOWN_LINK_CHECK_CONFIG_FILE: .markdown-link-check.json
+
+# YAML
+YAML_YAMLLINT_CONFIG_FILE: .yamllint.yml
+
+# JSON
+JSON_JSONLINT_CLI_LINT_MODE: file
+JSON_ESLINT_PLUGIN_JSONC_FILE_EXTENSIONS:
+  - .json
+  - .jsonc
+
+# -----------------------------------------------------------------------------
+# OUTPUT & REPORTING
+# -----------------------------------------------------------------------------
+
+# Show elapsed time for each linter
+SHOW_ELAPSED_TIME: true
+
+# Generate SARIF report for GitHub Security tab
+SARIF_REPORTER: true
+
+# Output format for console
+CONSOLE_REPORTER: true
+
+# Generate JSON report
+JSON_REPORTER: true
+
+# GitHub Status Reporter (shows individual linter status)
+GITHUB_STATUS_REPORTER: true
+
+# Comment on PR with results
+GITHUB_COMMENT_REPORTER: true
+
+# Only report new errors in PRs (not existing issues)
+# REPORT_TYPE: new
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE TUNING
+# -----------------------------------------------------------------------------
+
+# Run linters in parallel (faster)
+PARALLEL: true
+
+# Maximum number of parallel linters
+# PARALLEL_PROCESS_COUNT: 4
+
+# Fail fast on first error (set to false to see all issues)
+FAIL_IF_MISSING_LINTER_IN_FLAVOR: false
+
+# -----------------------------------------------------------------------------
+# PRE/POST COMMANDS
+# -----------------------------------------------------------------------------
+
+# Commands to run before linting
+# PRE_COMMANDS:
+#   - command: npm ci
+#     cwd: workspace
+
+# Commands to run after linting
+# POST_COMMANDS:
+#   - command: echo "Linting complete"
+
+# -----------------------------------------------------------------------------
+# SEVERITY CONFIGURATION
+# -----------------------------------------------------------------------------
+
+# Treat warnings as errors
+# DISABLE_ERRORS: false
+
+# Linters that should not cause failure (just warn)
+DISABLE_ERRORS_LINTERS:
+  - MARKDOWN_MARKDOWNLINT
+  - SPELL_CSPELL
+  - REPOSITORY_GIT_DIFF
+
+# -----------------------------------------------------------------------------
+# AUTO-FIX CONFIGURATION
+# -----------------------------------------------------------------------------
+# Enable auto-fix for specific linters only
+
+# APPLY_FIXES_EVENT: pull_request
+# APPLY_FIXES_MODE: commit
+
+# Linters that should apply fixes automatically
+# APPLY_FIXES_LINTERS:
+#   - JAVASCRIPT_PRETTIER
+#   - TYPESCRIPT_PRETTIER
+#   - PYTHON_BLACK
+#   - PYTHON_ISORT
+#   - MARKDOWN_MARKDOWNLINT

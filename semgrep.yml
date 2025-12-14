@@ -1,0 +1,175 @@
+# =============================================================================
+# Semgrep Configuration
+# =============================================================================
+# Custom rules and configuration for Semgrep SAST scanning
+# Documentation: https://semgrep.dev/docs/writing-rules/overview
+#
+# WHY SEMGREP?
+# - Lightweight and fast (compared to CodeQL)
+# - Great community rules (p/security-audit, p/secrets)
+# - Easy to write custom rules
+# - Free for local/CI usage
+#
+# =============================================================================
+
+rules:
+  # ---------------------------------------------------------------------------
+  # CUSTOM RULE: Hardcoded Credentials
+  # ---------------------------------------------------------------------------
+  - id: hardcoded-password-assignment
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "..."
+          - pattern: $VAR = '...'
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(password|passwd|pwd|secret|api_key|apikey|token|auth)
+      - pattern-not: $VAR = ""
+      - pattern-not: $VAR = "example"
+      - pattern-not: $VAR = "placeholder"
+      - pattern-not: $VAR = "changeme"
+      - pattern-not: $VAR = "your-.*-here"
+    message: >-
+      Possible hardcoded credential in variable '$VAR'.
+      Use environment variables or a secrets manager instead.
+    languages: [javascript, typescript, python, go, java, csharp]
+    severity: ERROR
+    metadata:
+      cwe:
+        - "CWE-798: Use of Hard-coded Credentials"
+      owasp:
+        - A07:2021 - Identification and Authentication Failures
+      category: security
+      technology:
+        - secrets
+
+  # ---------------------------------------------------------------------------
+  # CUSTOM RULE: Insecure HTTP URLs
+  # ---------------------------------------------------------------------------
+  - id: insecure-http-url
+    patterns:
+      - pattern-regex: http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)
+      - pattern-not-regex: http://example\.com
+      - pattern-not-regex: http://test\.
+    message: >-
+      Insecure HTTP URL detected. Use HTTPS instead for production URLs.
+    languages: [generic]
+    severity: WARNING
+    metadata:
+      cwe:
+        - "CWE-319: Cleartext Transmission of Sensitive Information"
+      category: security
+
+  # ---------------------------------------------------------------------------
+  # CUSTOM RULE: Console.log in Production Code
+  # ---------------------------------------------------------------------------
+  - id: no-console-log-production
+    patterns:
+      - pattern: console.log(...)
+    paths:
+      include:
+        - "src/**"
+      exclude:
+        - "**/*.test.*"
+        - "**/*.spec.*"
+        - "**/tests/**"
+    message: >-
+      console.log() detected in production code.
+      Use a proper logging framework instead.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: best-practice
+
+  # ---------------------------------------------------------------------------
+  # CUSTOM RULE: SQL Injection Risk (String Concatenation)
+  # ---------------------------------------------------------------------------
+  - id: sql-injection-string-concat
+    patterns:
+      - pattern-either:
+          - pattern: $QUERY = "SELECT ... " + $INPUT
+          - pattern: $QUERY = "INSERT ... " + $INPUT
+          - pattern: $QUERY = "UPDATE ... " + $INPUT
+          - pattern: $QUERY = "DELETE ... " + $INPUT
+          - pattern: $QUERY = f"SELECT ... {$INPUT}"
+          - pattern: $QUERY = f"INSERT ... {$INPUT}"
+          - pattern: $QUERY = f"UPDATE ... {$INPUT}"
+          - pattern: $QUERY = f"DELETE ... {$INPUT}"
+    message: >-
+      Possible SQL injection via string concatenation.
+      Use parameterised queries instead.
+    languages: [javascript, typescript, python]
+    severity: ERROR
+    metadata:
+      cwe:
+        - "CWE-89: SQL Injection"
+      owasp:
+        - A03:2021 - Injection
+      category: security
+
+  # ---------------------------------------------------------------------------
+  # CUSTOM RULE: Unsafe eval() Usage
+  # ---------------------------------------------------------------------------
+  - id: unsafe-eval
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function($X)
+          - pattern: setTimeout($X, ...)
+          - pattern: setInterval($X, ...)
+      - pattern-not: eval("...")  # Allow static strings
+      - pattern-not: new Function("...")
+    message: >-
+      Unsafe use of eval() or similar. This can lead to code injection.
+      Consider using JSON.parse() or other safe alternatives.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe:
+        - "CWE-95: Eval Injection"
+      category: security
+
+  # ---------------------------------------------------------------------------
+  # CUSTOM RULE: Missing Error Handling
+  # ---------------------------------------------------------------------------
+  - id: missing-try-catch-async
+    patterns:
+      - pattern: |
+          async function $FUNC(...) {
+            ...
+            await $EXPR
+            ...
+          }
+      - pattern-not: |
+          async function $FUNC(...) {
+            try {
+              ...
+            } catch (...) {
+              ...
+            }
+          }
+    message: >-
+      Async function '$FUNC' contains await without try-catch.
+      Consider adding error handling.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: best-practice
+
+# =============================================================================
+# CONFIGURATION OPTIONS
+# =============================================================================
+# These are set via CLI flags in the workflow, but can be configured here too
+
+# Default severity threshold
+# options:
+#   severity: ERROR
+
+# Paths to scan (default: current directory)
+# paths:
+#   include:
+#     - src/
+#     - lib/
+#   exclude:
+#     - tests/
+#     - vendor/

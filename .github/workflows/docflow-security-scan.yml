@@ -1,37 +1,66 @@
-name: "DocFlow: Security Scanning"
+# =============================================================================
+# DocFlow: Extended Security Scanning
+# =============================================================================
+#
+# PURPOSE:
+# This workflow provides EXTENDED security scanning that complements the
+# main CI pipeline (docflow-ci.yml). While CI handles fast, per-commit scans,
+# this workflow provides deeper, scheduled security analysis.
+#
+# WHEN TO USE:
+# - Scheduled weekly scans (runs Tuesday 8:30 AM UTC by default)
+# - Manual deep-dive security audits
+# - OWASP ZAP web application scanning
+# - Full dependency audit with remediation guidance
+#
+# RELATIONSHIP TO CI PIPELINE:
+# ┌────────────────────────────────────────────────────────────────────────┐
+# │                     SECURITY SCANNING STRATEGY                         │
+# ├─────────────────────────┬──────────────────────────────────────────────┤
+# │  CI Pipeline (per-PR)   │  Extended Scan (weekly/manual)               │
+# ├─────────────────────────┼──────────────────────────────────────────────┤
+# │  TruffleHog (secrets)   │  TruffleHog (full history)                   │
+# │  Trivy (quick SCA)      │  Trivy (comprehensive + container)           │
+# │  Semgrep (SAST)         │  Semgrep (all rules + custom)                │
+# │                         │  OWASP ZAP (DAST - web app testing)          │
+# │                         │  CodeQL (deep semantic analysis)             │
+# │                         │  License compliance checking                  │
+# └─────────────────────────┴──────────────────────────────────────────────┘
+#
+# =============================================================================
 
-# Comprehensive security scanning workflow
-# Combines: OWASP ZAP, CodeQL, dependency scanning, secret detection
-# Extracted from best practices across spotify-genre-sorter, CIPP, uptime-kuma
+name: "DocFlow: Extended Security Scan"
 
 on:
-  push:
-    branches: [main, master, develop]
-  pull_request:
-    branches: [main, master]
   schedule:
-    # Weekly full scan (Tuesday 8:30 AM UTC)
+    # Weekly full scan - Tuesday 8:30 AM UTC
     - cron: '30 8 * * 2'
+
   workflow_dispatch:
     inputs:
       scan_type:
         description: 'Type of security scan'
         required: true
-        default: 'baseline'
+        default: 'full'
         type: choice
         options:
-          - baseline
-          - api
-          - full
-          - all
+          - quick       # TruffleHog + Trivy only
+          - full        # All scanners
+          - dast        # OWASP ZAP only
+          - compliance  # License + policy checks
       target_url:
         description: 'Target URL for OWASP ZAP (optional)'
         required: false
         type: string
-      fail_on_warnings:
-        description: 'Fail build on warnings'
+      fail_on_findings:
+        description: 'Fail build on security findings'
         required: false
-        default: false
+        default: true
+        type: boolean
+      create_issues:
+        description: 'Create GitHub issues for findings'
+        required: false
+        default: true
         type: boolean
 
 permissions:
@@ -44,45 +73,291 @@ env:
   SCAN_RESULTS_DIR: security-reports
 
 jobs:
-  # ============================================
-  # LAYER 1: Code Analysis (CodeQL)
-  # ============================================
+  # ===========================================================================
+  # LAYER 1: Secret Scanning (Full History)
+  # ===========================================================================
+  secrets-full-scan:
+    name: "Secrets (Full History)"
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type != 'dast' && github.event.inputs.scan_type != 'compliance'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comprehensive scan
+
+      - name: TruffleHog Deep Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified --json --results=trufflehog-results.json
+        continue-on-error: true
+
+      - name: Generate Secret Report
+        run: |
+          mkdir -p $SCAN_RESULTS_DIR
+
+          echo "# Secret Scan Results" > $SCAN_RESULTS_DIR/secrets-report.md
+          echo "" >> $SCAN_RESULTS_DIR/secrets-report.md
+          echo "**Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $SCAN_RESULTS_DIR/secrets-report.md
+          echo "**Scan Type:** Full History" >> $SCAN_RESULTS_DIR/secrets-report.md
+          echo "" >> $SCAN_RESULTS_DIR/secrets-report.md
+
+          if [ -f "trufflehog-results.json" ]; then
+            FINDINGS=$(cat trufflehog-results.json | jq -s 'length')
+            echo "**Verified Secrets Found:** $FINDINGS" >> $SCAN_RESULTS_DIR/secrets-report.md
+
+            if [ "$FINDINGS" -gt "0" ]; then
+              echo "" >> $SCAN_RESULTS_DIR/secrets-report.md
+              echo "## Findings" >> $SCAN_RESULTS_DIR/secrets-report.md
+              echo "" >> $SCAN_RESULTS_DIR/secrets-report.md
+              cat trufflehog-results.json | jq -r '.[].SourceMetadata.Data.Filesystem.file' 2>/dev/null | sort -u | head -20 >> $SCAN_RESULTS_DIR/secrets-report.md || true
+            fi
+          else
+            echo "**Status:** No verified secrets found" >> $SCAN_RESULTS_DIR/secrets-report.md
+          fi
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-full-scan
+          path: ${{ env.SCAN_RESULTS_DIR }}/
+          retention-days: 90
+
+  # ===========================================================================
+  # LAYER 2: Comprehensive SCA (Trivy)
+  # ===========================================================================
+  sca-comprehensive:
+    name: "SCA (Comprehensive)"
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type != 'dast' && github.event.inputs.scan_type != 'compliance'
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create results directory
+        run: mkdir -p $SCAN_RESULTS_DIR
+
+      # Filesystem scan (dependencies)
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: '${{ env.SCAN_RESULTS_DIR }}/trivy-fs.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      # Container scan (if Dockerfile exists)
+      - name: Check for Dockerfile
+        id: dockerfile
+        run: |
+          if [ -f "Dockerfile" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build container for scanning
+        if: steps.dockerfile.outputs.exists == 'true'
+        run: docker build -t scan-target:latest . || true
+        continue-on-error: true
+
+      - name: Trivy Container Scan
+        if: steps.dockerfile.outputs.exists == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: 'scan-target:latest'
+          format: 'sarif'
+          output: '${{ env.SCAN_RESULTS_DIR }}/trivy-container.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        continue-on-error: true
+
+      # IaC scan (Terraform, CloudFormation, etc.)
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: '${{ env.SCAN_RESULTS_DIR }}/trivy-iac.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+        continue-on-error: true
+
+      - name: Upload to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: '${{ env.SCAN_RESULTS_DIR }}'
+          category: 'trivy-comprehensive'
+        continue-on-error: true
+
+      - name: Generate SCA Report
+        run: |
+          echo "# SCA Comprehensive Report" > $SCAN_RESULTS_DIR/sca-report.md
+          echo "" >> $SCAN_RESULTS_DIR/sca-report.md
+          echo "**Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $SCAN_RESULTS_DIR/sca-report.md
+          echo "" >> $SCAN_RESULTS_DIR/sca-report.md
+          echo "## Scans Performed" >> $SCAN_RESULTS_DIR/sca-report.md
+          echo "- Filesystem (dependencies)" >> $SCAN_RESULTS_DIR/sca-report.md
+          echo "- Container image: ${{ steps.dockerfile.outputs.exists }}" >> $SCAN_RESULTS_DIR/sca-report.md
+          echo "- Infrastructure as Code" >> $SCAN_RESULTS_DIR/sca-report.md
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-comprehensive
+          path: ${{ env.SCAN_RESULTS_DIR }}/
+          retention-days: 90
+
+  # ===========================================================================
+  # LAYER 3: CodeQL Deep Analysis
+  # ===========================================================================
   codeql-analysis:
     name: "CodeQL Analysis"
     runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event_name == 'schedule'
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         language: ['javascript', 'typescript', 'python']
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Detect language applicability
+        id: detect
+        run: |
+          case "${{ matrix.language }}" in
+            javascript|typescript)
+              if find . -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" | head -1 | grep -q .; then
+                echo "applicable=true" >> $GITHUB_OUTPUT
+              else
+                echo "applicable=false" >> $GITHUB_OUTPUT
+              fi
+              ;;
+            python)
+              if find . -name "*.py" | head -1 | grep -q .; then
+                echo "applicable=true" >> $GITHUB_OUTPUT
+              else
+                echo "applicable=false" >> $GITHUB_OUTPUT
+              fi
+              ;;
+            *)
+              echo "applicable=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
       - name: Initialize CodeQL
+        if: steps.detect.outputs.applicable == 'true'
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
-        continue-on-error: true
 
       - name: Autobuild
+        if: steps.detect.outputs.applicable == 'true'
         uses: github/codeql-action/autobuild@v3
         continue-on-error: true
 
       - name: Perform CodeQL Analysis
+        if: steps.detect.outputs.applicable == 'true'
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
+
+  # ===========================================================================
+  # LAYER 4: OWASP ZAP (DAST)
+  # ===========================================================================
+  owasp-zap-scan:
+    name: "OWASP ZAP (${{ matrix.scan_type }})"
+    runs-on: ubuntu-latest
+    # Note: secrets cannot be checked at job level, so we check target_url and vars only
+    # The step will check for secrets.PORTAL_URL as a fallback
+    if: |
+      (github.event.inputs.scan_type == 'full' ||
+       github.event.inputs.scan_type == 'dast' ||
+       github.event_name == 'schedule')
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scan_type: [baseline, api]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine Target URL
+        id: target
+        run: |
+          if [ -n "${{ github.event.inputs.target_url }}" ]; then
+            echo "url=${{ github.event.inputs.target_url }}" >> $GITHUB_OUTPUT
+            echo "has_target=true" >> $GITHUB_OUTPUT
+          elif [ -n "${{ vars.PORTAL_URL }}" ]; then
+            echo "url=${{ vars.PORTAL_URL }}" >> $GITHUB_OUTPUT
+            echo "has_target=true" >> $GITHUB_OUTPUT
+          elif [ -n "${{ secrets.PORTAL_URL }}" ]; then
+            echo "url=${{ secrets.PORTAL_URL }}" >> $GITHUB_OUTPUT
+            echo "has_target=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_target=false" >> $GITHUB_OUTPUT
+            echo "No target URL configured"
+          fi
+
+      - name: ZAP Baseline Scan
+        if: steps.target.outputs.has_target == 'true' && matrix.scan_type == 'baseline'
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ steps.target.outputs.url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
         continue-on-error: true
 
-  # ============================================
-  # LAYER 2: Dependency Scanning
-  # ============================================
-  dependency-scan:
-    name: "Dependency Vulnerability Scan"
+      - name: Check for OpenAPI spec
+        if: matrix.scan_type == 'api'
+        id: openapi
+        run: |
+          for file in openapi.yaml openapi.yml openapi.json api/openapi.yaml swagger.yaml swagger.json; do
+            if [ -f "$file" ]; then
+              echo "spec=$file" >> $GITHUB_OUTPUT
+              echo "has_spec=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
+          echo "has_spec=false" >> $GITHUB_OUTPUT
+
+      - name: ZAP API Scan
+        if: steps.target.outputs.has_target == 'true' && matrix.scan_type == 'api' && steps.openapi.outputs.has_spec == 'true'
+        uses: zaproxy/action-api-scan@v0.7.0
+        with:
+          target: ${{ steps.target.outputs.url }}
+          format: openapi
+        continue-on-error: true
+
+      - name: Upload ZAP Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-${{ matrix.scan_type }}-report
+          path: report_*.html
+          retention-days: 90
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # LAYER 5: License Compliance
+  # ===========================================================================
+  license-check:
+    name: "License Compliance"
     runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'compliance' || github.event.inputs.scan_type == 'full' || github.event_name == 'schedule'
+    timeout-minutes: 10
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -91,317 +366,154 @@ jobs:
           node-version: '20'
         continue-on-error: true
 
-      - name: NPM Audit
-        id: npm_audit
+      - name: Check NPM Licenses
+        if: hashFiles('package.json') != ''
         run: |
           mkdir -p $SCAN_RESULTS_DIR
+          npm ci 2>/dev/null || npm install 2>/dev/null || true
+          npx license-checker --json > $SCAN_RESULTS_DIR/npm-licenses.json 2>/dev/null || true
 
-          if [ -f "package.json" ]; then
-            echo "Running npm audit..."
-            npm audit --json > $SCAN_RESULTS_DIR/npm-audit.json 2>/dev/null || true
+          # Check for problematic licenses
+          if [ -f "$SCAN_RESULTS_DIR/npm-licenses.json" ]; then
+            echo "# License Compliance Report" > $SCAN_RESULTS_DIR/license-report.md
+            echo "" >> $SCAN_RESULTS_DIR/license-report.md
 
-            # Extract summary
-            HIGH=$(jq '.metadata.vulnerabilities.high // 0' $SCAN_RESULTS_DIR/npm-audit.json 2>/dev/null || echo "0")
-            CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' $SCAN_RESULTS_DIR/npm-audit.json 2>/dev/null || echo "0")
+            # Count licenses
+            TOTAL=$(jq 'keys | length' $SCAN_RESULTS_DIR/npm-licenses.json)
+            echo "**Total packages:** $TOTAL" >> $SCAN_RESULTS_DIR/license-report.md
+            echo "" >> $SCAN_RESULTS_DIR/license-report.md
 
-            echo "high_count=$HIGH" >> $GITHUB_OUTPUT
-            echo "critical_count=$CRITICAL" >> $GITHUB_OUTPUT
-
-            if [ "$CRITICAL" -gt "0" ]; then
-              echo "::warning::Found $CRITICAL critical vulnerabilities"
+            # Check for GPL (might require code disclosure)
+            GPL_COUNT=$(jq '[.[] | select(.licenses | test("GPL"; "i"))] | length' $SCAN_RESULTS_DIR/npm-licenses.json 2>/dev/null || echo "0")
+            if [ "$GPL_COUNT" -gt "0" ]; then
+              echo "**Warning:** $GPL_COUNT packages with GPL licenses" >> $SCAN_RESULTS_DIR/license-report.md
             fi
-            if [ "$HIGH" -gt "0" ]; then
-              echo "::warning::Found $HIGH high vulnerabilities"
+
+            # Check for unknown/unlicensed
+            UNKNOWN=$(jq '[.[] | select(.licenses == "UNKNOWN" or .licenses == null)] | length' $SCAN_RESULTS_DIR/npm-licenses.json 2>/dev/null || echo "0")
+            if [ "$UNKNOWN" -gt "0" ]; then
+              echo "**Warning:** $UNKNOWN packages with unknown licenses" >> $SCAN_RESULTS_DIR/license-report.md
             fi
-          else
-            echo "No package.json found, skipping npm audit"
-            echo "high_count=0" >> $GITHUB_OUTPUT
-            echo "critical_count=0" >> $GITHUB_OUTPUT
           fi
         continue-on-error: true
 
-      - name: Python Safety Check
+      - name: Check Python Licenses
+        if: hashFiles('requirements.txt') != '' || hashFiles('pyproject.toml') != ''
         run: |
-          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; then
-            pip install safety
-            safety check --json > $SCAN_RESULTS_DIR/python-safety.json 2>/dev/null || true
-          fi
+          pip install pip-licenses 2>/dev/null || true
+          pip-licenses --format=json > $SCAN_RESULTS_DIR/python-licenses.json 2>/dev/null || true
         continue-on-error: true
 
-      - name: Upload Dependency Reports
+      - name: Upload License Reports
         uses: actions/upload-artifact@v4
         with:
-          name: dependency-scan-results
+          name: license-compliance
           path: ${{ env.SCAN_RESULTS_DIR }}/
-          retention-days: 30
-          if-no-files-found: ignore
-
-  # ============================================
-  # LAYER 3: Secret Detection
-  # ============================================
-  secret-scan:
-    name: "Secret Detection"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Scan for Secrets
-        id: secret_scan
-        run: |
-          mkdir -p $SCAN_RESULTS_DIR
-          SECRETS_FOUND=0
-
-          echo "# Secret Scan Results" > $SCAN_RESULTS_DIR/secret-scan.md
-          echo "" >> $SCAN_RESULTS_DIR/secret-scan.md
-          echo "Scanned: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $SCAN_RESULTS_DIR/secret-scan.md
-          echo "" >> $SCAN_RESULTS_DIR/secret-scan.md
-
-          # Define patterns to search for
-          PATTERNS=(
-            'password\s*[=:]\s*["\047][^"\047]+["\047]'
-            'api[_-]?key\s*[=:]\s*["\047][\w-]+["\047]'
-            'client[_-]?secret\s*[=:]\s*["\047][\w-]+["\047]'
-            'secret\s*[=:]\s*["\047][^"\047]+["\047]'
-            'token\s*[=:]\s*["\047][\w-]+["\047]'
-            '-----BEGIN.*PRIVATE KEY-----'
-            'AKIA[0-9A-Z]{16}'
-            'ghp_[a-zA-Z0-9]{36}'
-            'gho_[a-zA-Z0-9]{36}'
-          )
-
-          EXCLUDE_PATTERNS='\.example|\.template|\.test\.|\.spec\.|node_modules|\.git'
-
-          for pattern in "${PATTERNS[@]}"; do
-            MATCHES=$(grep -rniE "$pattern" --include="*.{js,ts,py,json,yml,yaml,env,config}" . 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" || true)
-            if [ -n "$MATCHES" ]; then
-              echo "## Pattern: $pattern" >> $SCAN_RESULTS_DIR/secret-scan.md
-              echo '```' >> $SCAN_RESULTS_DIR/secret-scan.md
-              echo "$MATCHES" >> $SCAN_RESULTS_DIR/secret-scan.md
-              echo '```' >> $SCAN_RESULTS_DIR/secret-scan.md
-              echo "" >> $SCAN_RESULTS_DIR/secret-scan.md
-              SECRETS_FOUND=$((SECRETS_FOUND + 1))
-            fi
-          done
-
-          echo "secrets_found=$SECRETS_FOUND" >> $GITHUB_OUTPUT
-
-          if [ "$SECRETS_FOUND" -gt "0" ]; then
-            echo "::warning::Potential secrets detected! Review $SCAN_RESULTS_DIR/secret-scan.md"
-          else
-            echo "No potential secrets detected" >> $SCAN_RESULTS_DIR/secret-scan.md
-          fi
-
-      - name: Upload Secret Scan Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: secret-scan-results
-          path: ${{ env.SCAN_RESULTS_DIR }}/secret-scan.md
-          retention-days: 30
-
-  # ============================================
-  # LAYER 4: OWASP ZAP (API/Web Scanning)
-  # ============================================
-  owasp-zap-baseline:
-    name: "OWASP ZAP Baseline Scan"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.scan_type == 'baseline' || github.event.inputs.scan_type == 'all'))
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Determine Target URL
-        id: target
-        run: |
-          if [ -n "${{ github.event.inputs.target_url }}" ]; then
-            echo "url=${{ github.event.inputs.target_url }}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ secrets.PORTAL_URL }}" ]; then
-            echo "url=${{ secrets.PORTAL_URL }}" >> $GITHUB_OUTPUT
-          else
-            echo "url=" >> $GITHUB_OUTPUT
-            echo "No target URL configured, skipping ZAP scan"
-          fi
-
-      - name: OWASP ZAP Baseline Scan
-        if: steps.target.outputs.url != ''
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: ${{ steps.target.outputs.url }}
-          rules_file_name: '.zap/rules.tsv'
-          cmd_options: '-a'
-        continue-on-error: true
-
-      - name: Upload ZAP Report
-        if: steps.target.outputs.url != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-baseline-report
-          path: report_html.html
-          retention-days: 30
-          if-no-files-found: ignore
-
-  owasp-zap-api:
-    name: "OWASP ZAP API Scan"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.scan_type == 'api' || github.event.inputs.scan_type == 'all'))
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Find OpenAPI Spec
-        id: openapi
-        run: |
-          # Search for OpenAPI spec file
-          SPEC_FILE=""
-          for file in openapi.yaml openapi.yml openapi.json api/openapi.yaml api/openapi.yml swagger.yaml swagger.json; do
-            if [ -f "$file" ]; then
-              SPEC_FILE="$file"
-              break
-            fi
-          done
-
-          if [ -n "$SPEC_FILE" ]; then
-            echo "spec_file=$SPEC_FILE" >> $GITHUB_OUTPUT
-            echo "Found OpenAPI spec: $SPEC_FILE"
-          else
-            echo "spec_file=" >> $GITHUB_OUTPUT
-            echo "No OpenAPI spec found"
-          fi
-
-      - name: Check API URL configured
-        id: check_api
-        env:
-          API_URL: ${{ secrets.API_URL }}
-        run: |
-          if [ -n "$API_URL" ]; then
-            echo "has_api_url=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_api_url=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: OWASP ZAP API Scan
-        if: steps.openapi.outputs.spec_file != '' && steps.check_api.outputs.has_api_url == 'true'
-        uses: zaproxy/action-api-scan@v0.7.0
-        with:
-          target: ${{ secrets.API_URL }}
-          format: openapi
-          rules_file_name: '.zap/rules.tsv'
-        continue-on-error: true
-
-      - name: Upload API Scan Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-api-report
-          path: report_*.html
           retention-days: 90
           if-no-files-found: ignore
 
-  owasp-zap-full:
-    name: "OWASP ZAP Full Scan"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.scan_type == 'full' || github.event.inputs.scan_type == 'all')
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Determine Full Scan Target
-        id: full_target
-        env:
-          PORTAL_URL: ${{ secrets.PORTAL_URL }}
-          INPUT_URL: ${{ github.event.inputs.target_url }}
-        run: |
-          if [ -n "$INPUT_URL" ]; then
-            echo "url=$INPUT_URL" >> $GITHUB_OUTPUT
-            echo "has_target=true" >> $GITHUB_OUTPUT
-          elif [ -n "$PORTAL_URL" ]; then
-            echo "url=$PORTAL_URL" >> $GITHUB_OUTPUT
-            echo "has_target=true" >> $GITHUB_OUTPUT
-          else
-            echo "url=" >> $GITHUB_OUTPUT
-            echo "has_target=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: OWASP ZAP Full Scan
-        if: steps.full_target.outputs.has_target == 'true'
-        uses: zaproxy/action-full-scan@v0.10.0
-        with:
-          target: ${{ steps.full_target.outputs.url }}
-          rules_file_name: '.zap/rules.tsv'
-          cmd_options: '-a'
-        continue-on-error: true
-
-      - name: Upload Full Scan Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-full-report
-          path: report_*.html
-          retention-days: 90
-          if-no-files-found: ignore
-
-  # ============================================
-  # SUMMARY & NOTIFICATIONS
-  # ============================================
+  # ===========================================================================
+  # SUMMARY & REPORTING
+  # ===========================================================================
   security-summary:
     name: "Security Summary"
-    needs: [codeql-analysis, dependency-scan, secret-scan, owasp-zap-baseline]
+    needs: [secrets-full-scan, sca-comprehensive, codeql-analysis, owasp-zap-scan, license-check]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Generate Security Summary
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-reports/
+        continue-on-error: true
+
+      - name: Generate Summary
         run: |
-          echo "# Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# Extended Security Scan Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Type:** ${{ github.event.inputs.scan_type || 'scheduled' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           echo "## Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Scan Type | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning (Full) | ${{ needs.secrets-full-scan.result == 'success' && 'Pass' || needs.secrets-full-scan.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA (Comprehensive) | ${{ needs.sca-comprehensive.result == 'success' && 'Pass' || needs.sca-comprehensive.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| CodeQL Analysis | ${{ needs.codeql-analysis.result == 'success' && 'Pass' || needs.codeql-analysis.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dependency Scan | ${{ needs.dependency-scan.result == 'success' && 'Pass' || needs.dependency-scan.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Secret Detection | ${{ needs.secret-scan.result == 'success' && 'Pass' || needs.secret-scan.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| OWASP ZAP Baseline | ${{ needs.owasp-zap-baseline.result == 'success' && 'Pass' || needs.owasp-zap-baseline.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| OWASP ZAP | ${{ needs.owasp-zap-scan.result == 'success' && 'Pass' || needs.owasp-zap-scan.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| License Compliance | ${{ needs.license-check.result == 'success' && 'Pass' || needs.license-check.result == 'skipped' && 'Skipped' || 'Review Required' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **Triggered By**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Run**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Scan Type**: ${{ github.event.inputs.scan_type || 'baseline' }}" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Download the scan reports from the workflow artifacts for detailed findings." >> $GITHUB_STEP_SUMMARY
 
       - name: Create Issue for Critical Findings
-        if: failure()
+        if: github.event.inputs.create_issues == 'true' || github.event_name == 'schedule'
         uses: actions/github-script@v7
         with:
           script: |
-            const title = `Security Scan Alert - Run #${{ github.run_number }}`;
-            const body = `
-            ## Security Scan Detected Potential Issues
+            // Check if any scans failed
+            const results = {
+              secrets: '${{ needs.secrets-full-scan.result }}',
+              sca: '${{ needs.sca-comprehensive.result }}',
+              codeql: '${{ needs.codeql-analysis.result }}',
+              zap: '${{ needs.owasp-zap-scan.result }}',
+              license: '${{ needs.license-check.result }}'
+            };
 
-            **Run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            **Triggered By**: ${{ github.event_name }}
-            **Actor**: ${{ github.actor }}
+            const failures = Object.entries(results)
+              .filter(([_, status]) => status === 'failure')
+              .map(([name, _]) => name);
+
+            if (failures.length > 0) {
+              const title = `Security Scan Alert - ${new Date().toISOString().split('T')[0]}`;
+              const body = `
+            ## Extended Security Scan Results
+
+            **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Triggered By:** ${{ github.event_name }}
+            **Scan Type:** ${{ github.event.inputs.scan_type || 'scheduled' }}
+
+            ### Scans Requiring Review
+
+            ${failures.map(f => `- ${f}`).join('\n')}
 
             ### Action Required
-            Please review the security scan artifacts and address any findings.
 
-            ### Scan Results
-            - CodeQL: ${{ needs.codeql-analysis.result }}
-            - Dependencies: ${{ needs.dependency-scan.result }}
-            - Secrets: ${{ needs.secret-scan.result }}
-            - OWASP ZAP: ${{ needs.owasp-zap-baseline.result }}
-
-            ### Next Steps
             1. Download artifacts from the workflow run
             2. Review findings and assess severity
             3. Create remediation tasks as needed
             4. Close this issue when resolved
+
+            ### All Results
+
+            | Scan | Status |
+            |------|--------|
+            | Secrets | ${results.secrets} |
+            | SCA | ${results.sca} |
+            | CodeQL | ${results.codeql} |
+            | OWASP ZAP | ${results.zap} |
+            | License | ${results.license} |
             `;
 
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: title,
-              body: body,
-              labels: ['security', 'automated']
-            });
+              // Check for existing open issue
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'security,automated',
+                state: 'open'
+              });
+
+              if (issues.length === 0) {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  body: body,
+                  labels: ['security', 'automated']
+                });
+              }
+            }
         continue-on-error: true

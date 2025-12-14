@@ -492,7 +492,7 @@ jobs:
 
   summary:
     name: "Documentation Summary"
-    needs: [generate-index, convert-to-pdf]
+    needs: [generate-readme, generate-diagrams, generate-data-dictionary, generate-index, convert-to-pdf]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -504,6 +504,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| README | ${{ needs.generate-readme.result == 'success' && 'Pass' || needs.generate-readme.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Diagrams | ${{ needs.generate-diagrams.result == 'success' && 'Pass' || needs.generate-diagrams.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Data Dictionary | ${{ needs.generate-data-dictionary.result == 'success' && 'Pass' || needs.generate-data-dictionary.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Index | ${{ needs.generate-index.result == 'success' && 'Pass' || needs.generate-index.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY

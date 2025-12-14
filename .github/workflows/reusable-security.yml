@@ -1,0 +1,184 @@
+# =============================================================================
+# Reusable Workflow: Security Scanning (TruffleHog + Trivy + Semgrep)
+# =============================================================================
+# Call this workflow from your main CI pipeline:
+#
+#   security:
+#     uses: ./.github/workflows/reusable-security.yml
+#     with:
+#       run-secrets: true
+#       run-sca: true
+#       run-sast: true
+#
+# =============================================================================
+
+name: "Reusable: Security"
+
+on:
+  workflow_call:
+    inputs:
+      run-secrets:
+        description: 'Run TruffleHog secret scanning'
+        required: false
+        default: true
+        type: boolean
+      run-sca:
+        description: 'Run Trivy SCA scanning'
+        required: false
+        default: true
+        type: boolean
+      run-sast:
+        description: 'Run Semgrep SAST scanning'
+        required: false
+        default: true
+        type: boolean
+      trivy-severity:
+        description: 'Trivy severity threshold'
+        required: false
+        default: 'CRITICAL,HIGH'
+        type: string
+      fail-on-findings:
+        description: 'Fail workflow on security findings'
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      secrets-status:
+        description: 'Secret scanning status'
+        value: ${{ jobs.secrets.outputs.status }}
+      sca-status:
+        description: 'SCA scanning status'
+        value: ${{ jobs.trivy.outputs.status }}
+      sast-status:
+        description: 'SAST scanning status'
+        value: ${{ jobs.semgrep.outputs.status }}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # TruffleHog - Secret Detection with Git History Scanning
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: TruffleHog
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-secrets }}
+    timeout-minutes: 10
+    outputs:
+      status: ${{ steps.scan.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Scan
+        id: scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+          head: HEAD
+          extra_args: --only-verified --json
+
+  # ---------------------------------------------------------------------------
+  # Trivy - Software Composition Analysis
+  # ---------------------------------------------------------------------------
+  trivy:
+    name: Trivy SCA
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-sca }}
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.scan.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy (SARIF output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Upload to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'
+        continue-on-error: true
+
+      - name: Run Trivy (fail on high severity)
+        id: scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: ${{ inputs.trivy-severity }}
+          exit-code: ${{ inputs.fail-on-findings && '1' || '0' }}
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: trivy-results.sarif
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Semgrep - Static Application Security Testing
+  # ---------------------------------------------------------------------------
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-sast }}
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep
+    outputs:
+      status: ${{ steps.scan.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep (SARIF output)
+        run: |
+          semgrep ci \
+            --sarif --output=semgrep-results.sarif \
+            --config=auto \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --metrics=off \
+            || true
+
+      - name: Upload to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'semgrep-results.sarif'
+          category: 'semgrep'
+        continue-on-error: true
+
+      - name: Run Semgrep (strict)
+        id: scan
+        run: |
+          if [ "${{ inputs.fail-on-findings }}" = "true" ]; then
+            semgrep scan --config=auto --config=p/security-audit --error --severity=ERROR --metrics=off
+          else
+            semgrep scan --config=auto --metrics=off || true
+          fi
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-reports
+          path: semgrep-results.sarif
+          retention-days: 30
+          if-no-files-found: ignore

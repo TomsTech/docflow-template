@@ -1,0 +1,599 @@
+# =============================================================================
+# DocFlow CI/CD Pipeline - Best Practices Template
+# =============================================================================
+#
+# ARCHITECTURE: Parallel Fast Checks + Long Tests with Quality Gate
+#
+#                         ┌──────────────────┐
+#                         │     TRIGGER      │
+#                         └────────┬─────────┘
+#                                  │
+#               ┌──────────────────┴──────────────────┐
+#               │                                     │
+#               ▼                                     ▼
+#     ┌─────────────────────┐             ┌─────────────────────┐
+#     │    FAST CHECKS      │             │    LONG TESTS       │
+#     │    (< 2 minutes)    │             │    (2-10 minutes)   │
+#     ├─────────────────────┤             ├─────────────────────┤
+#     │ • Mega-Linter       │             │ • Unit Tests        │
+#     │ • TruffleHog        │             │ • Trivy SCA         │
+#     │ • Format Validation │             │ • Semgrep SAST      │
+#     │ • Schema Checks     │             │ • Integration Tests │
+#     └──────────┬──────────┘             └──────────┬──────────┘
+#               │                                     │
+#               └──────────────────┬──────────────────┘
+#                                  │
+#                                  ▼
+#                         ┌─────────────────┐
+#                         │  QUALITY GATE   │
+#                         │  (Aggregation)  │
+#                         └────────┬────────┘
+#                                  │
+#                                  ▼
+#                         ┌─────────────────┐
+#                         │ OPTIONAL: DEPLOY│
+#                         └─────────────────┘
+#
+# WHY THIS PATTERN?
+# 1. Fast feedback: Developers get lint/format errors within ~90 seconds
+# 2. Efficient: Long-running jobs don't block quick wins
+# 3. Total time reduced: Parallel execution vs sequential
+# 4. Clear gate: Single pass/fail status for branch protection
+#
+# TOOLING RATIONALE:
+# ┌─────────────────┬──────────────────┬───────────────────────────────────────┐
+# │ Category        │ Tool             │ Why?                                  │
+# ├─────────────────┼──────────────────┼───────────────────────────────────────┤
+# │ Secret Scanning │ TruffleHog       │ Scans git history, verifies secrets   │
+# │ SCA/Vuln        │ Trivy            │ Swiss army knife: OS, libs, containers│
+# │ SAST            │ Semgrep          │ Fast, customisable, great community   │
+# │ Linting         │ Mega-Linter      │ 50+ linters, better than Super-Linter │
+# │ Unit Testing    │ Native runners   │ Jest/Pytest/Go with coverage reports  │
+# └─────────────────┴──────────────────┴───────────────────────────────────────┘
+#
+# =============================================================================
+
+name: "DocFlow: CI Pipeline"
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip test execution'
+        required: false
+        default: false
+        type: boolean
+      skip_security:
+        description: 'Skip security scans'
+        required: false
+        default: false
+        type: boolean
+      debug_mode:
+        description: 'Enable debug output'
+        required: false
+        default: false
+        type: boolean
+
+# Prevent concurrent runs on same branch (cancel in-progress)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  checks: write
+
+env:
+  # Global configuration
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  GO_VERSION: '1.21'
+
+  # Artifact retention
+  ARTIFACT_RETENTION_DAYS: 30
+
+  # Coverage thresholds
+  COVERAGE_THRESHOLD: 70
+
+# =============================================================================
+# FAST CHECKS - Run in parallel, typically complete in < 2 minutes
+# These provide immediate feedback on basic code quality issues
+# =============================================================================
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # FAST CHECK 1: Mega-Linter (aggregated linting)
+  # ---------------------------------------------------------------------------
+  lint:
+    name: "Lint (Mega-Linter)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better diff analysis
+
+      - name: Mega-Linter
+        id: ml
+        uses: oxsecurity/megalinter@v8
+        env:
+          VALIDATE_ALL_CODEBASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use configuration from .mega-linter.yml if present
+          MEGALINTER_CONFIG: .mega-linter.yml
+          # Fail on errors but not warnings for PR workflow
+          DISABLE_ERRORS: false
+
+      - name: Upload Mega-Linter reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: megalinter-reports
+          path: |
+            megalinter-reports/
+            mega-linter.log
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: ignore
+
+      - name: Create lint annotation
+        if: failure()
+        run: |
+          echo "::error::Linting failed. Check Mega-Linter reports for details."
+
+  # ---------------------------------------------------------------------------
+  # FAST CHECK 2: TruffleHog (secret scanning with git history)
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: "Secrets (TruffleHog)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history to scan all commits
+
+      - name: TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+          head: HEAD
+          extra_args: --only-verified --json
+        continue-on-error: false
+
+      - name: Create secrets annotation
+        if: failure()
+        run: |
+          echo "::error::Verified secrets detected! Review TruffleHog output immediately."
+
+  # ---------------------------------------------------------------------------
+  # FAST CHECK 3: Format validation (quick structural checks)
+  # ---------------------------------------------------------------------------
+  format:
+    name: "Format & Schema Validation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate YAML files
+        run: |
+          echo "Validating YAML syntax..."
+          find . -name "*.yml" -o -name "*.yaml" | head -50 | while read file; do
+            python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null || \
+              echo "::warning file=$file::Invalid YAML syntax"
+          done
+
+      - name: Validate JSON files
+        run: |
+          echo "Validating JSON syntax..."
+          find . -name "*.json" -not -path "*/node_modules/*" -not -path "*/.git/*" | head -50 | while read file; do
+            python3 -c "import json; json.load(open('$file'))" 2>/dev/null || \
+              echo "::warning file=$file::Invalid JSON syntax"
+          done
+
+      - name: Check for common issues
+        run: |
+          # Check for trailing whitespace in source files
+          if find . -name "*.ts" -o -name "*.js" -o -name "*.py" | head -20 | xargs grep -l '[[:blank:]]$' 2>/dev/null; then
+            echo "::warning::Some files have trailing whitespace"
+          fi
+
+          # Check for TODO/FIXME comments (informational)
+          TODO_COUNT=$(grep -rn "TODO\|FIXME" --include="*.ts" --include="*.js" --include="*.py" . 2>/dev/null | wc -l || echo "0")
+          echo "Found $TODO_COUNT TODO/FIXME comments"
+
+# =============================================================================
+# LONG TESTS - Run in parallel with fast checks, typically 2-10 minutes
+# These are more thorough but take longer to complete
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # LONG TEST 1: Unit Tests with Coverage
+  # ---------------------------------------------------------------------------
+  test:
+    name: "Test (${{ matrix.lang }})"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: node
+            check: package.json
+          - lang: python
+            check: pyproject.toml
+          - lang: go
+            check: go.mod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if language applies
+        id: check
+        run: |
+          if [ -f "${{ matrix.check }}" ]; then
+            echo "applicable=true" >> $GITHUB_OUTPUT
+          else
+            echo "applicable=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Node.js Testing
+      - name: Setup Node.js
+        if: steps.check.outputs.applicable == 'true' && matrix.lang == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install & Test (Node.js)
+        if: steps.check.outputs.applicable == 'true' && matrix.lang == 'node'
+        run: |
+          npm ci
+          npm test -- --coverage --coverageReporters=text --coverageReporters=lcov || npm test
+        continue-on-error: false
+
+      # Python Testing
+      - name: Setup Python
+        if: steps.check.outputs.applicable == 'true' && matrix.lang == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install & Test (Python)
+        if: steps.check.outputs.applicable == 'true' && matrix.lang == 'python'
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt 2>/dev/null || pip install pytest pytest-cov
+          pytest --cov --cov-report=xml --cov-report=term-missing || pytest
+        continue-on-error: false
+
+      # Go Testing
+      - name: Setup Go
+        if: steps.check.outputs.applicable == 'true' && matrix.lang == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install & Test (Go)
+        if: steps.check.outputs.applicable == 'true' && matrix.lang == 'go'
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+        continue-on-error: false
+
+      - name: Upload coverage
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.lang }}
+          path: |
+            coverage/
+            coverage.xml
+            coverage.out
+            lcov.info
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # LONG TEST 2: Trivy (SCA - Software Composition Analysis)
+  # ---------------------------------------------------------------------------
+  trivy:
+    name: "SCA (Trivy)"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_security != 'true' }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          # Don't fail on vulnerabilities, let quality gate decide
+          exit-code: '0'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'
+        continue-on-error: true
+
+      - name: Run Trivy (table output for logs)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail on CRITICAL/HIGH
+        continue-on-error: false
+
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: trivy-results.sarif
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ---------------------------------------------------------------------------
+  # LONG TEST 3: Semgrep (SAST - Static Application Security Testing)
+  # ---------------------------------------------------------------------------
+  semgrep:
+    name: "SAST (Semgrep)"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_security != 'true' }}
+    timeout-minutes: 10
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          semgrep ci \
+            --sarif --output=semgrep-results.sarif \
+            --config=auto \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --metrics=off \
+            || true  # Don't fail here, output SARIF regardless
+
+      - name: Upload Semgrep results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'semgrep-results.sarif'
+          category: 'semgrep'
+        continue-on-error: true
+
+      - name: Run Semgrep (strict mode for gate)
+        run: |
+          semgrep scan \
+            --config=auto \
+            --config=p/security-audit \
+            --error \
+            --severity=ERROR \
+            --metrics=off
+        continue-on-error: false
+
+      - name: Upload Semgrep reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-reports
+          path: semgrep-results.sarif
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: ignore
+
+# =============================================================================
+# QUALITY GATE - Aggregates all results and determines final pass/fail
+# This is the single status check that branch protection should require
+# =============================================================================
+
+  quality-gate:
+    name: "Quality Gate"
+    needs: [lint, secrets, format, test, trivy, semgrep]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+    steps:
+      - name: Evaluate Quality Gate
+        id: gate
+        run: |
+          echo "## Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Track overall status
+          PASSED=true
+
+          # Define job results
+          declare -A JOBS=(
+            ["Linting (Mega-Linter)"]="${{ needs.lint.result }}"
+            ["Secret Scanning (TruffleHog)"]="${{ needs.secrets.result }}"
+            ["Format Validation"]="${{ needs.format.result }}"
+            ["Unit Tests"]="${{ needs.test.result }}"
+            ["SCA (Trivy)"]="${{ needs.trivy.result }}"
+            ["SAST (Semgrep)"]="${{ needs.semgrep.result }}"
+          )
+
+          # Build results table
+          echo "| Check | Status | Required |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          for job in "${!JOBS[@]}"; do
+            result="${JOBS[$job]}"
+
+            case $result in
+              success)
+                status="Pass"
+                icon="$status"
+                ;;
+              skipped)
+                status="Skipped"
+                icon="$status"
+                ;;
+              failure)
+                status="FAIL"
+                icon="$status"
+                PASSED=false
+                ;;
+              cancelled)
+                status="Cancelled"
+                icon="$status"
+                ;;
+              *)
+                status="Unknown"
+                icon="$status"
+                ;;
+            esac
+
+            # Determine if required (secrets and security are always required)
+            if [[ "$job" == *"Secret"* ]] || [[ "$job" == *"Lint"* ]]; then
+              required="Yes"
+            else
+              required="No"
+            fi
+
+            echo "| $job | $icon | $required |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Final verdict
+          if [ "$PASSED" = true ]; then
+            echo "### Result: PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "passed=true" >> $GITHUB_OUTPUT
+            echo "Quality gate passed!"
+          else
+            echo "### Result: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "One or more required checks failed. Please review the individual job outputs." >> $GITHUB_STEP_SUMMARY
+            echo "passed=false" >> $GITHUB_OUTPUT
+            echo "Quality gate failed!"
+            exit 1
+          fi
+
+      - name: Post PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const passed = '${{ steps.gate.outputs.passed }}' === 'true';
+
+            const jobs = {
+              'Linting': '${{ needs.lint.result }}',
+              'Secrets': '${{ needs.secrets.result }}',
+              'Format': '${{ needs.format.result }}',
+              'Tests': '${{ needs.test.result }}',
+              'Trivy SCA': '${{ needs.trivy.result }}',
+              'Semgrep SAST': '${{ needs.semgrep.result }}'
+            };
+
+            let body = `## Quality Gate ${passed ? 'Passed' : 'Failed'}\n\n`;
+            body += `| Check | Status |\n|-------|--------|\n`;
+
+            for (const [name, result] of Object.entries(jobs)) {
+              const icon = result === 'success' ? 'Pass' :
+                          result === 'skipped' ? 'Skip' :
+                          result === 'failure' ? 'FAIL' : 'Unknown';
+              body += `| ${name} | ${icon} |\n`;
+            }
+
+            body += `\n[View full run](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Quality Gate')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+        continue-on-error: true
+
+# =============================================================================
+# OPTIONAL: Post-Gate Jobs (only run if quality gate passes)
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # Build artifacts (only on main branch after gate passes)
+  # ---------------------------------------------------------------------------
+  build:
+    name: "Build"
+    needs: [quality-gate]
+    if: needs.quality-gate.outputs.passed == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+        continue-on-error: true
+
+      - name: Build
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci
+            npm run build --if-present
+          elif [ -f "pyproject.toml" ]; then
+            pip install build
+            python -m build
+          elif [ -f "go.mod" ]; then
+            go build ./...
+          else
+            echo "No recognised build system found"
+          fi
+        continue-on-error: true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            dist/
+            build/
+            out/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: ignore

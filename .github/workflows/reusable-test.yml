@@ -1,0 +1,248 @@
+# =============================================================================
+# Reusable Workflow: Testing with Coverage
+# =============================================================================
+# Call this workflow from your main CI pipeline:
+#
+#   test:
+#     uses: ./.github/workflows/reusable-test.yml
+#     with:
+#       node-version: '20'
+#       coverage-threshold: 70
+#
+# =============================================================================
+
+name: "Reusable: Test"
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      python-version:
+        description: 'Python version'
+        required: false
+        default: '3.11'
+        type: string
+      go-version:
+        description: 'Go version'
+        required: false
+        default: '1.21'
+        type: string
+      coverage-threshold:
+        description: 'Minimum coverage percentage'
+        required: false
+        default: 70
+        type: number
+      fail-on-coverage:
+        description: 'Fail if coverage is below threshold'
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      node-status:
+        description: 'Node.js test status'
+        value: ${{ jobs.test-node.outputs.status }}
+      python-status:
+        description: 'Python test status'
+        value: ${{ jobs.test-python.outputs.status }}
+      go-status:
+        description: 'Go test status'
+        value: ${{ jobs.test-go.outputs.status }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Node.js Testing
+  # ---------------------------------------------------------------------------
+  test-node:
+    name: Node.js Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.test.outcome }}
+      coverage: ${{ steps.coverage.outputs.coverage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if Node.js project
+        id: check
+        run: |
+          if [ -f "package.json" ]; then
+            echo "applicable=true" >> $GITHUB_OUTPUT
+          else
+            echo "applicable=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: steps.check.outputs.applicable == 'true'
+        run: npm ci
+
+      - name: Run tests
+        id: test
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          npm test -- --coverage --coverageReporters=text --coverageReporters=lcov --coverageReporters=json-summary 2>/dev/null || npm test
+        continue-on-error: ${{ !inputs.fail-on-coverage }}
+
+      - name: Extract coverage
+        id: coverage
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          if [ -f "coverage/coverage-summary.json" ]; then
+            COVERAGE=$(jq '.total.lines.pct' coverage/coverage-summary.json 2>/dev/null || echo "0")
+            echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+            echo "Coverage: $COVERAGE%"
+
+            if [ "${{ inputs.fail-on-coverage }}" = "true" ]; then
+              if (( $(echo "$COVERAGE < ${{ inputs.coverage-threshold }}" | bc -l) )); then
+                echo "::error::Coverage ($COVERAGE%) is below threshold (${{ inputs.coverage-threshold }}%)"
+                exit 1
+              fi
+            fi
+          else
+            echo "coverage=0" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Upload coverage
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-node
+          path: coverage/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Python Testing
+  # ---------------------------------------------------------------------------
+  test-python:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.test.outcome }}
+      coverage: ${{ steps.coverage.outputs.coverage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if Python project
+        id: check
+        run: |
+          if [ -f "pyproject.toml" ] || [ -f "requirements.txt" ] || [ -f "setup.py" ]; then
+            echo "applicable=true" >> $GITHUB_OUTPUT
+          else
+            echo "applicable=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Python
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          pip install pytest pytest-cov
+          if [ -f "pyproject.toml" ]; then
+            pip install -e ".[dev]" 2>/dev/null || pip install -e "." 2>/dev/null || true
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run tests
+        id: test
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          pytest --cov --cov-report=xml --cov-report=term-missing --cov-report=json || pytest
+        continue-on-error: ${{ !inputs.fail-on-coverage }}
+
+      - name: Extract coverage
+        id: coverage
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          if [ -f "coverage.json" ]; then
+            COVERAGE=$(jq '.totals.percent_covered' coverage.json 2>/dev/null || echo "0")
+            echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          else
+            echo "coverage=0" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Upload coverage
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python
+          path: |
+            coverage.xml
+            coverage.json
+            htmlcov/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Go Testing
+  # ---------------------------------------------------------------------------
+  test-go:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.test.outcome }}
+      coverage: ${{ steps.coverage.outputs.coverage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if Go project
+        id: check
+        run: |
+          if [ -f "go.mod" ]; then
+            echo "applicable=true" >> $GITHUB_OUTPUT
+          else
+            echo "applicable=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Go
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+
+      - name: Run tests
+        id: test
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Extract coverage
+        id: coverage
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "Coverage: $COVERAGE%"
+
+      - name: Upload coverage
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-go
+          path: coverage.out
+          retention-days: 30
+          if-no-files-found: ignore
