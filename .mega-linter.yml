@@ -55,6 +55,10 @@ DISABLE_LINTERS:
   # Disable copypaste detection (can be noisy)
   - COPYPASTE_JSCPD
 
+  # Disable DevSkim - too many false positives on workflow files
+  # (flags TODO/FIXME strings even in detection scripts)
+  - REPOSITORY_DEVSKIM
+
   # Disable formatters if you prefer standalone tools
   # - JAVASCRIPT_PRETTIER
   # - TYPESCRIPT_PRETTIER
