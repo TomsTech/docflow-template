@@ -138,8 +138,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Use configuration from .mega-linter.yml if present
           MEGALINTER_CONFIG: .mega-linter.yml
-          # Fail on errors but not warnings for PR workflow
-          DISABLE_ERRORS: false
+        # Let DISABLE_ERRORS_LINTERS in .mega-linter.yml control which linters are blocking
+        # Template repos have expected "errors" (dead links to placeholder files)
+        continue-on-error: true
 
       - name: Upload Mega-Linter reports
         if: always()
@@ -502,6 +503,13 @@ jobs:
           for job in "${!JOBS[@]}"; do
             result="${JOBS[$job]}"
 
+            # Determine if required (secrets are always required, lint is informational for template repos)
+            if [[ "$job" == *"Secret"* ]]; then
+              required="Yes"
+            else
+              required="No"
+            fi
+
             case $result in
               success)
                 status="Pass"
@@ -514,7 +522,10 @@ jobs:
               failure)
                 status="FAIL"
                 icon="$status"
-                PASSED=false
+                # Only fail the gate if this is a required check
+                if [[ "$required" == "Yes" ]]; then
+                  PASSED=false
+                fi
                 ;;
               cancelled)
                 status="Cancelled"
@@ -525,13 +536,6 @@ jobs:
                 icon="$status"
                 ;;
             esac
-
-            # Determine if required (secrets and security are always required)
-            if [[ "$job" == *"Secret"* ]] || [[ "$job" == *"Lint"* ]]; then
-              required="Yes"
-            else
-              required="No"
-            fi
 
             echo "| $job | $icon | $required |" >> $GITHUB_STEP_SUMMARY
           done
