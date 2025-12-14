@@ -252,13 +252,14 @@ jobs:
       - name: Check if language applies
         id: check
         run: |
+          LANG_UPPER=$(echo "${{ matrix.lang }}" | tr '[:lower:]' '[:upper:]')
           if [ -f "${{ matrix.check }}" ]; then
             echo "applicable=true" >> $GITHUB_OUTPUT
             echo "::notice::Found ${{ matrix.check }} - ${{ matrix.lang }} tests will run"
           else
             echo "applicable=false" >> $GITHUB_OUTPUT
             echo "========================================"
-            echo "  NO ${{ matrix.lang | tr '[:lower:]' '[:upper:]' }} PROJECT DETECTED"
+            echo "  NO $LANG_UPPER PROJECT DETECTED"
             echo "========================================"
             echo "::warning::No ${{ matrix.check }} found - skipping ${{ matrix.lang }} tests (this is OK for templates)"
             echo "" >> $GITHUB_STEP_SUMMARY
