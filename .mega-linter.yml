@@ -157,6 +157,8 @@ FAIL_IF_MISSING_LINTER_IN_FLAVOR: false
 # Linters that should not cause failure (just warn)
 DISABLE_ERRORS_LINTERS:
   - MARKDOWN_MARKDOWNLINT
+  # Markdown link checker finds broken links in templates (expected for template repos)
+  - MARKDOWN_MARKDOWN_LINK_CHECK
   - SPELL_CSPELL
   - REPOSITORY_GIT_DIFF
   # KICS warns about unpinned action SHAs - valid but impractical for templates
