@@ -191,7 +191,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: '${{ env.SCAN_RESULTS_DIR }}'
           category: 'trivy-comprehensive'
@@ -256,19 +256,19 @@ jobs:
 
       - name: Initialize CodeQL
         if: steps.detect.outputs.applicable == 'true'
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
 
       - name: Autobuild
         if: steps.detect.outputs.applicable == 'true'
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
         continue-on-error: true
 
       - name: Perform CodeQL Analysis
         if: steps.detect.outputs.applicable == 'true'
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
 
