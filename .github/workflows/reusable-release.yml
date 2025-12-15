@@ -1,0 +1,426 @@
+# =============================================================================
+# Reusable Workflow: Automated Release
+# =============================================================================
+# Call this workflow from your main release pipeline:
+#
+#   release:
+#     uses: TomsTech/docflow-template/.github/workflows/reusable-release.yml@main
+#     with:
+#       generate-test-report: true
+#       generate-changelog: true
+#       create-github-release: true
+#     permissions:
+#       contents: write
+#
+# Trigger example (in your repo):
+#   on:
+#     push:
+#       tags:
+#         - 'v*'
+#
+# =============================================================================
+
+name: "Reusable: Release"
+
+on:
+  workflow_call:
+    inputs:
+      # ----- Version Detection -----
+      version-source:
+        description: 'How to detect version (tag, package.json, cargo.toml, pyproject.toml)'
+        required: false
+        default: 'tag'
+        type: string
+
+      # ----- Test Report Generation -----
+      generate-test-report:
+        description: 'Generate HTML test report for release'
+        required: false
+        default: false
+        type: boolean
+      report-title:
+        description: 'Title for the test report'
+        required: false
+        default: 'Test Report'
+        type: string
+
+      # ----- Changelog Extraction -----
+      generate-changelog:
+        description: 'Extract changelog from CHANGELOG.md for release notes'
+        required: false
+        default: true
+        type: boolean
+      changelog-file:
+        description: 'Path to changelog file'
+        required: false
+        default: 'CHANGELOG.md'
+        type: string
+
+      # ----- GitHub Release -----
+      create-github-release:
+        description: 'Create GitHub release'
+        required: false
+        default: true
+        type: boolean
+      draft-release:
+        description: 'Create as draft release'
+        required: false
+        default: false
+        type: boolean
+      auto-detect-prerelease:
+        description: 'Auto-detect prerelease from version (alpha, beta, rc)'
+        required: false
+        default: true
+        type: boolean
+      force-prerelease:
+        description: 'Force this release as a prerelease'
+        required: false
+        default: false
+        type: boolean
+      generate-release-notes:
+        description: 'Generate release notes from commits (fallback if no changelog)'
+        required: false
+        default: true
+        type: boolean
+
+      # ----- Artifacts -----
+      attach-artifacts:
+        description: 'Attach build artifacts to release'
+        required: false
+        default: false
+        type: boolean
+      artifact-patterns:
+        description: 'Glob patterns for artifacts to attach (newline-separated)'
+        required: false
+        default: ''
+        type: string
+
+      # ----- Build Settings -----
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      run-build:
+        description: 'Run build before release'
+        required: false
+        default: false
+        type: boolean
+      build-command:
+        description: 'Custom build command'
+        required: false
+        default: 'npm run build'
+        type: string
+
+      # ----- npm Publishing -----
+      publish-npm:
+        description: 'Publish to npm registry'
+        required: false
+        default: false
+        type: boolean
+      npm-registry:
+        description: 'npm registry URL'
+        required: false
+        default: 'https://registry.npmjs.org'
+        type: string
+
+    secrets:
+      npm-token:
+        description: 'npm auth token for publishing'
+        required: false
+
+    outputs:
+      version:
+        description: 'Release version'
+        value: ${{ jobs.release.outputs.version }}
+      release-url:
+        description: 'GitHub release URL'
+        value: ${{ jobs.release.outputs.release-url }}
+      test-report-path:
+        description: 'Path to test report artifact'
+        value: ${{ jobs.release.outputs.test-report-path }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release-url: ${{ steps.github-release.outputs.url }}
+      test-report-path: ${{ steps.test-report.outputs.path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ----- Version Detection -----
+      - name: Get version from tag
+        id: version-tag
+        if: ${{ inputs.version-source == 'tag' }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "::notice::Version from tag: $VERSION"
+
+      - name: Get version from package.json
+        id: version-package
+        if: ${{ inputs.version-source == 'package.json' }}
+        run: |
+          VERSION="v$(jq -r '.version' package.json)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "::notice::Version from package.json: $VERSION"
+
+      - name: Get version from pyproject.toml
+        id: version-pyproject
+        if: ${{ inputs.version-source == 'pyproject.toml' }}
+        run: |
+          VERSION="v$(grep -m1 'version' pyproject.toml | cut -d'"' -f2)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "::notice::Version from pyproject.toml: $VERSION"
+
+      - name: Get version from Cargo.toml
+        id: version-cargo
+        if: ${{ inputs.version-source == 'cargo.toml' }}
+        run: |
+          VERSION="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "::notice::Version from Cargo.toml: $VERSION"
+
+      - name: Set version output
+        id: version
+        run: |
+          VERSION="${{ steps.version-tag.outputs.version }}${{ steps.version-package.outputs.version }}${{ steps.version-pyproject.outputs.version }}${{ steps.version-cargo.outputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "## Release: $VERSION" >> $GITHUB_STEP_SUMMARY
+
+      # ----- Setup -----
+      - name: Check if Node.js project
+        id: check-node
+        run: |
+          if [ -f "package.json" ]; then
+            echo "is_node=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_node=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check-node.outputs.is_node == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+          registry-url: ${{ inputs.npm-registry }}
+
+      - name: Install dependencies
+        if: steps.check-node.outputs.is_node == 'true'
+        run: npm ci || npm install
+
+      # ----- Build -----
+      - name: Run build
+        if: ${{ inputs.run-build && steps.check-node.outputs.is_node == 'true' }}
+        run: ${{ inputs.build-command }}
+
+      # ----- Test Report -----
+      - name: Generate test report
+        id: test-report
+        if: ${{ inputs.generate-test-report && steps.check-node.outputs.is_node == 'true' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Check for custom report generator
+          if [ -f "scripts/generate-test-report.mjs" ]; then
+            node scripts/generate-test-report.mjs \
+              --title "${{ inputs.report-title }} $VERSION" \
+              --description "Automated test results for release $VERSION"
+            REPORT_FILE="test-report.html"
+          elif [ -f "scripts/generate-test-report.js" ]; then
+            node scripts/generate-test-report.js \
+              --title "${{ inputs.report-title }} $VERSION" \
+              --description "Automated test results for release $VERSION"
+            REPORT_FILE="test-report.html"
+          else
+            # Try to run tests with coverage and use lcov report
+            npm test -- --coverage --coverageReporters=html 2>/dev/null || npm test 2>/dev/null || true
+            if [ -d "coverage/lcov-report" ]; then
+              cp -r coverage/lcov-report test-report
+              REPORT_FILE="test-report"
+            else
+              echo "::warning::No test report generator found and no coverage report available"
+              REPORT_FILE=""
+            fi
+          fi
+
+          if [ -n "$REPORT_FILE" ] && [ -e "$REPORT_FILE" ]; then
+            # Rename to include version if it's a single file
+            if [ -f "$REPORT_FILE" ]; then
+              mv "$REPORT_FILE" "test-report-$VERSION.html"
+              echo "path=test-report-$VERSION.html" >> $GITHUB_OUTPUT
+            else
+              echo "path=$REPORT_FILE" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "path=" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # ----- Changelog Extraction -----
+      - name: Extract changelog
+        id: changelog
+        if: ${{ inputs.generate-changelog }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANGELOG_FILE="${{ inputs.changelog-file }}"
+
+          if [ -f "$CHANGELOG_FILE" ]; then
+            echo "Found $CHANGELOG_FILE, extracting notes for $VERSION..."
+
+            # Try to extract section for this version
+            # Handles formats like: ## [1.0.0], ## v1.0.0, ## 1.0.0
+            VERSION_NUM="${VERSION#v}"
+
+            CONTENT=$(awk "
+              /^## \\[${VERSION_NUM}\\]|^## ${VERSION}|^## v${VERSION_NUM}|^## ${VERSION_NUM}/ {
+                found=1
+                next
+              }
+              found && /^## / {
+                exit
+              }
+              found {
+                print
+              }
+            " "$CHANGELOG_FILE")
+
+            if [ -z "$CONTENT" ]; then
+              echo "No changelog section found for $VERSION"
+              echo "has_changelog=false" >> $GITHUB_OUTPUT
+            else
+              echo "$CONTENT" > release_notes.md
+              echo "has_changelog=true" >> $GITHUB_OUTPUT
+              echo "::notice::Extracted changelog for $VERSION"
+            fi
+          else
+            echo "No $CHANGELOG_FILE found"
+            echo "has_changelog=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create fallback release notes
+        if: ${{ steps.changelog.outputs.has_changelog != 'true' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Release $VERSION" > release_notes.md
+          echo "" >> release_notes.md
+          echo "See the [full changelog](https://github.com/${{ github.repository }}/commits/$VERSION) for details." >> release_notes.md
+
+      # ----- Prerelease Detection -----
+      - name: Detect prerelease
+        id: prerelease
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if [ "${{ inputs.force-prerelease }}" = "true" ]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "::notice::Forced prerelease"
+          elif [ "${{ inputs.auto-detect-prerelease }}" = "true" ]; then
+            if echo "$VERSION" | grep -qiE "(alpha|beta|rc|preview|dev)"; then
+              echo "is_prerelease=true" >> $GITHUB_OUTPUT
+              echo "::notice::Detected prerelease version: $VERSION"
+            else
+              echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ----- GitHub Release -----
+      - name: Prepare artifact list
+        id: artifacts
+        if: ${{ inputs.create-github-release }}
+        run: |
+          ARTIFACTS=""
+
+          # Add test report if generated
+          if [ -n "${{ steps.test-report.outputs.path }}" ] && [ -e "${{ steps.test-report.outputs.path }}" ]; then
+            ARTIFACTS="${{ steps.test-report.outputs.path }}"
+          fi
+
+          # Add custom artifacts
+          if [ -n "${{ inputs.artifact-patterns }}" ]; then
+            while IFS= read -r pattern; do
+              if [ -n "$pattern" ]; then
+                # Expand glob pattern
+                for file in $pattern; do
+                  if [ -e "$file" ]; then
+                    if [ -n "$ARTIFACTS" ]; then
+                      ARTIFACTS="$ARTIFACTS
+$file"
+                    else
+                      ARTIFACTS="$file"
+                    fi
+                  fi
+                done
+              fi
+            done <<< "${{ inputs.artifact-patterns }}"
+          fi
+
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$ARTIFACTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: github-release
+        if: ${{ inputs.create-github-release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: ${{ inputs.draft-release }}
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          generate_release_notes: ${{ steps.changelog.outputs.has_changelog != 'true' && inputs.generate-release-notes }}
+          files: ${{ steps.artifacts.outputs.files }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Release summary
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ steps.version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prerelease | ${{ steps.prerelease.outputs.is_prerelease }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Draft | ${{ inputs.draft-release }} |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.github-release.outputs.url }}" ]; then
+            echo "| URL | ${{ steps.github-release.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ----- npm Publishing -----
+      - name: Publish to npm
+        if: ${{ inputs.publish-npm && steps.check-node.outputs.is_node == 'true' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Determine npm tag
+          if [ "${{ steps.prerelease.outputs.is_prerelease }}" = "true" ]; then
+            if echo "$VERSION" | grep -qi "alpha"; then
+              NPM_TAG="alpha"
+            elif echo "$VERSION" | grep -qi "beta"; then
+              NPM_TAG="beta"
+            elif echo "$VERSION" | grep -qi "rc"; then
+              NPM_TAG="rc"
+            else
+              NPM_TAG="next"
+            fi
+          else
+            NPM_TAG="latest"
+          fi
+
+          echo "Publishing to npm with tag: $NPM_TAG"
+          npm publish --tag "$NPM_TAG" --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}

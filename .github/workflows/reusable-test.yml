@@ -1,13 +1,15 @@
 # =============================================================================
-# Reusable Workflow: Testing with Coverage
+# Reusable Workflow: Testing with Coverage & Reports
 # =============================================================================
 # Call this workflow from your main CI pipeline:
 #
 #   test:
-#     uses: ./.github/workflows/reusable-test.yml
+#     uses: TomsTech/docflow-template/.github/workflows/reusable-test.yml@main
 #     with:
 #       node-version: '20'
 #       coverage-threshold: 70
+#       generate-html-report: true
+#       typecheck: true
 #
 # =============================================================================
 
@@ -16,6 +18,7 @@ name: "Reusable: Test"
 on:
   workflow_call:
     inputs:
+      # ----- Language Versions -----
       node-version:
         description: 'Node.js version'
         required: false
@@ -31,6 +34,8 @@ on:
         required: false
         default: '1.21'
         type: string
+
+      # ----- Coverage Settings -----
       coverage-threshold:
         description: 'Minimum coverage percentage'
         required: false
@@ -41,20 +46,61 @@ on:
         required: false
         default: false
         type: boolean
+
+      # ----- Feature Toggles -----
+      generate-html-report:
+        description: 'Generate HTML test report'
+        required: false
+        default: false
+        type: boolean
+      typecheck:
+        description: 'Run TypeScript type checking (Node.js only)'
+        required: false
+        default: false
+        type: boolean
+      version-sync-check:
+        description: 'Check version sync across files (requires scripts/sync-version.mjs)'
+        required: false
+        default: false
+        type: boolean
+      validate-links:
+        description: 'Validate embedded links (requires scripts/validate-links.mjs)'
+        required: false
+        default: false
+        type: boolean
+
+      # ----- Report Settings -----
+      report-title:
+        description: 'Title for HTML test report'
+        required: false
+        default: 'Test Report'
+        type: string
+      artifact-retention:
+        description: 'Days to retain artifacts'
+        required: false
+        default: 30
+        type: number
+
     outputs:
       node-status:
         description: 'Node.js test status'
         value: ${{ jobs.test-node.outputs.status }}
+      node-coverage:
+        description: 'Node.js coverage percentage'
+        value: ${{ jobs.test-node.outputs.coverage }}
       python-status:
         description: 'Python test status'
         value: ${{ jobs.test-python.outputs.status }}
       go-status:
         description: 'Go test status'
         value: ${{ jobs.test-go.outputs.status }}
+      html-report-path:
+        description: 'Path to HTML test report artifact'
+        value: ${{ jobs.test-node.outputs.html-report-path }}
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Node.js Testing
+  # Node.js Testing with Optional Features
   # ---------------------------------------------------------------------------
   test-node:
     name: Node.js Tests
@@ -63,6 +109,7 @@ jobs:
     outputs:
       status: ${{ steps.test.outcome }}
       coverage: ${{ steps.coverage.outputs.coverage }}
+      html-report-path: ${{ steps.html-report.outputs.path }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +121,7 @@ jobs:
             echo "applicable=true" >> $GITHUB_OUTPUT
           else
             echo "applicable=false" >> $GITHUB_OUTPUT
+            echo "::notice::No package.json found - skipping Node.js tests"
           fi
 
       - name: Setup Node.js
@@ -85,15 +133,64 @@ jobs:
 
       - name: Install dependencies
         if: steps.check.outputs.applicable == 'true'
-        run: npm ci
+        run: npm ci || npm install
 
+      # ----- TypeScript Type Check -----
+      - name: TypeScript Type Check
+        if: steps.check.outputs.applicable == 'true' && inputs.typecheck
+        run: |
+          if npm run typecheck --if-present 2>/dev/null; then
+            echo "::notice::TypeScript type check passed"
+          elif npx tsc --noEmit 2>/dev/null; then
+            echo "::notice::TypeScript type check passed (via npx tsc)"
+          else
+            echo "::warning::No TypeScript configuration found or typecheck failed"
+          fi
+        continue-on-error: true
+
+      # ----- Version Sync Check -----
+      - name: Version Sync Check
+        if: steps.check.outputs.applicable == 'true' && inputs.version-sync-check
+        run: |
+          if [ -f "scripts/sync-version.mjs" ]; then
+            node scripts/sync-version.mjs --check
+          elif [ -f "scripts/sync-version.js" ]; then
+            node scripts/sync-version.js --check
+          else
+            echo "::warning::No sync-version script found at scripts/sync-version.mjs"
+          fi
+        continue-on-error: true
+
+      # ----- Link Validation -----
+      - name: Validate Embedded Links
+        if: steps.check.outputs.applicable == 'true' && inputs.validate-links
+        run: |
+          if [ -f "scripts/validate-links.mjs" ]; then
+            node scripts/validate-links.mjs
+          elif [ -f "scripts/validate-links.js" ]; then
+            node scripts/validate-links.js
+          else
+            echo "::warning::No validate-links script found at scripts/validate-links.mjs"
+          fi
+        continue-on-error: true
+
+      # ----- Run Tests -----
       - name: Run tests
         id: test
         if: steps.check.outputs.applicable == 'true'
         run: |
-          npm test -- --coverage --coverageReporters=text --coverageReporters=lcov --coverageReporters=json-summary 2>/dev/null || npm test
+          # Try to run tests with coverage
+          if npm test -- --coverage --coverageReporters=text --coverageReporters=lcov --coverageReporters=json-summary --coverageReporters=json 2>/dev/null; then
+            echo "Tests passed with coverage"
+          elif npm test 2>/dev/null; then
+            echo "Tests passed (no coverage)"
+          else
+            echo "::error::Tests failed"
+            exit 1
+          fi
         continue-on-error: ${{ !inputs.fail-on-coverage }}
 
+      # ----- Extract Coverage -----
       - name: Extract coverage
         id: coverage
         if: steps.check.outputs.applicable == 'true'
@@ -101,7 +198,7 @@ jobs:
           if [ -f "coverage/coverage-summary.json" ]; then
             COVERAGE=$(jq '.total.lines.pct' coverage/coverage-summary.json 2>/dev/null || echo "0")
             echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-            echo "Coverage: $COVERAGE%"
+            echo "::notice::Coverage: $COVERAGE%"
 
             if [ "${{ inputs.fail-on-coverage }}" = "true" ]; then
               if (( $(echo "$COVERAGE < ${{ inputs.coverage-threshold }}" | bc -l) )); then
@@ -111,16 +208,86 @@ jobs:
             fi
           else
             echo "coverage=0" >> $GITHUB_OUTPUT
+            echo "::notice::No coverage data found"
           fi
         continue-on-error: true
 
+      # ----- Generate HTML Test Report -----
+      - name: Generate HTML Test Report
+        id: html-report
+        if: steps.check.outputs.applicable == 'true' && inputs.generate-html-report
+        run: |
+          # Check for custom report generator first
+          if [ -f "scripts/generate-test-report.mjs" ]; then
+            node scripts/generate-test-report.mjs --title "${{ inputs.report-title }}"
+            echo "path=test-report.html" >> $GITHUB_OUTPUT
+          elif [ -f "scripts/generate-test-report.js" ]; then
+            node scripts/generate-test-report.js --title "${{ inputs.report-title }}"
+            echo "path=test-report.html" >> $GITHUB_OUTPUT
+          else
+            # Generate a basic HTML report from coverage data
+            echo "Generating basic HTML report from coverage data..."
+            if [ -f "coverage/lcov-report/index.html" ]; then
+              cp -r coverage/lcov-report html-report
+              echo "path=html-report" >> $GITHUB_OUTPUT
+            elif [ -f "coverage/coverage-summary.json" ]; then
+              # Create a simple HTML report
+              cat > test-report.html << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${{ inputs.report-title }}</title>
+  <style>
+    :root { --bg: #0a0a0a; --surface: #141414; --border: #2a2a2a; --text: #fafafa; --accent: #22c55e; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 2rem; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.75rem; margin-bottom: 1rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+    .stat { font-size: 2.5rem; font-weight: 700; color: var(--accent); }
+    .label { color: #888; font-size: 0.9rem; }
+    .meta { color: #666; font-size: 0.85rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>${{ inputs.report-title }}</h1>
+    <div class="card">
+      <div class="stat">${{ steps.coverage.outputs.coverage }}%</div>
+      <div class="label">Code Coverage</div>
+    </div>
+    <div class="meta">Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")</div>
+  </div>
+</body>
+</html>
+HTMLEOF
+              echo "path=test-report.html" >> $GITHUB_OUTPUT
+            else
+              echo "::warning::No coverage data available for HTML report"
+              echo "path=" >> $GITHUB_OUTPUT
+            fi
+          fi
+        continue-on-error: true
+
+      # ----- Upload Artifacts -----
       - name: Upload coverage
         if: steps.check.outputs.applicable == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-node
           path: coverage/
-          retention-days: 30
+          retention-days: ${{ inputs.artifact-retention }}
+          if-no-files-found: ignore
+
+      - name: Upload HTML Test Report
+        if: steps.check.outputs.applicable == 'true' && inputs.generate-html-report && steps.html-report.outputs.path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-html
+          path: ${{ steps.html-report.outputs.path }}
+          retention-days: ${{ inputs.artifact-retention }}
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
@@ -144,6 +311,7 @@ jobs:
             echo "applicable=true" >> $GITHUB_OUTPUT
           else
             echo "applicable=false" >> $GITHUB_OUTPUT
+            echo "::notice::No Python project files found - skipping Python tests"
           fi
 
       - name: Setup Python
@@ -167,7 +335,7 @@ jobs:
         id: test
         if: steps.check.outputs.applicable == 'true'
         run: |
-          pytest --cov --cov-report=xml --cov-report=term-missing --cov-report=json || pytest
+          pytest --cov --cov-report=xml --cov-report=term-missing --cov-report=json --cov-report=html || pytest
         continue-on-error: ${{ !inputs.fail-on-coverage }}
 
       - name: Extract coverage
@@ -177,6 +345,7 @@ jobs:
           if [ -f "coverage.json" ]; then
             COVERAGE=$(jq '.totals.percent_covered' coverage.json 2>/dev/null || echo "0")
             echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+            echo "::notice::Coverage: $COVERAGE%"
           else
             echo "coverage=0" >> $GITHUB_OUTPUT
           fi
@@ -191,7 +360,7 @@ jobs:
             coverage.xml
             coverage.json
             htmlcov/
-          retention-days: 30
+          retention-days: ${{ inputs.artifact-retention }}
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
@@ -215,6 +384,7 @@ jobs:
             echo "applicable=true" >> $GITHUB_OUTPUT
           else
             echo "applicable=false" >> $GITHUB_OUTPUT
+            echo "::notice::No go.mod found - skipping Go tests"
           fi
 
       - name: Setup Go
@@ -236,7 +406,7 @@ jobs:
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-          echo "Coverage: $COVERAGE%"
+          echo "::notice::Coverage: $COVERAGE%"
 
       - name: Upload coverage
         if: steps.check.outputs.applicable == 'true'
@@ -244,5 +414,5 @@ jobs:
         with:
           name: coverage-go
           path: coverage.out
-          retention-days: 30
+          retention-days: ${{ inputs.artifact-retention }}
           if-no-files-found: ignore

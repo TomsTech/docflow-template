@@ -1,14 +1,20 @@
 # =============================================================================
-# Reusable Workflow: Security Scanning (TruffleHog + Trivy + Semgrep)
+# Reusable Workflow: Security Scanning (Comprehensive)
 # =============================================================================
 # Call this workflow from your main CI pipeline:
 #
 #   security:
-#     uses: ./.github/workflows/reusable-security.yml
+#     uses: TomsTech/docflow-template/.github/workflows/reusable-security.yml@main
 #     with:
 #       run-secrets: true
 #       run-sca: true
 #       run-sast: true
+#       run-npm-audit: true
+#       run-snyk: true
+#       run-codeql: true
+#       run-dependency-check: true
+#     secrets:
+#       snyk-token: ${{ secrets.SNYK_TOKEN }}
 #
 # =============================================================================
 
@@ -17,6 +23,7 @@ name: "Reusable: Security"
 on:
   workflow_call:
     inputs:
+      # ----- Core Security Scans -----
       run-secrets:
         description: 'Run TruffleHog secret scanning'
         required: false
@@ -32,6 +39,51 @@ on:
         required: false
         default: true
         type: boolean
+
+      # ----- Package Security -----
+      run-npm-audit:
+        description: 'Run npm audit for Node.js projects'
+        required: false
+        default: false
+        type: boolean
+      npm-audit-level:
+        description: 'npm audit severity level (low, moderate, high, critical)'
+        required: false
+        default: 'high'
+        type: string
+
+      # ----- Snyk Integration -----
+      run-snyk:
+        description: 'Run Snyk security scan (requires snyk-token secret)'
+        required: false
+        default: false
+        type: boolean
+      snyk-severity:
+        description: 'Snyk severity threshold (low, medium, high, critical)'
+        required: false
+        default: 'high'
+        type: string
+
+      # ----- CodeQL Analysis -----
+      run-codeql:
+        description: 'Run GitHub CodeQL analysis'
+        required: false
+        default: false
+        type: boolean
+      codeql-languages:
+        description: 'Languages for CodeQL analysis (comma-separated: javascript,typescript,python,go)'
+        required: false
+        default: 'javascript,typescript'
+        type: string
+
+      # ----- Dependency Checks -----
+      run-dependency-check:
+        description: 'Check for outdated dependencies'
+        required: false
+        default: false
+        type: boolean
+
+      # ----- Configuration -----
       trivy-severity:
         description: 'Trivy severity threshold'
         required: false
@@ -42,6 +94,22 @@ on:
         required: false
         default: true
         type: boolean
+      node-version:
+        description: 'Node.js version for package scans'
+        required: false
+        default: '20'
+        type: string
+      artifact-retention:
+        description: 'Days to retain security report artifacts'
+        required: false
+        default: 30
+        type: number
+
+    secrets:
+      snyk-token:
+        description: 'Snyk API token for security scanning'
+        required: false
+
     outputs:
       secrets-status:
         description: 'Secret scanning status'
@@ -52,6 +120,18 @@ on:
       sast-status:
         description: 'SAST scanning status'
         value: ${{ jobs.semgrep.outputs.status }}
+      npm-audit-status:
+        description: 'npm audit status'
+        value: ${{ jobs.npm-audit.outputs.status }}
+      snyk-status:
+        description: 'Snyk scan status'
+        value: ${{ jobs.snyk.outputs.status }}
+      codeql-status:
+        description: 'CodeQL analysis status'
+        value: ${{ jobs.codeql.outputs.status }}
+      dependency-status:
+        description: 'Dependency check status'
+        value: ${{ jobs.dependency-check.outputs.status }}
 
 permissions:
   contents: read
@@ -130,7 +210,7 @@ jobs:
         with:
           name: trivy-reports
           path: trivy-results.sarif
-          retention-days: 30
+          retention-days: ${{ inputs.artifact-retention }}
 
   # ---------------------------------------------------------------------------
   # Semgrep - Static Application Security Testing
@@ -180,5 +260,314 @@ jobs:
         with:
           name: semgrep-reports
           path: semgrep-results.sarif
-          retention-days: 30
+          retention-days: ${{ inputs.artifact-retention }}
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # npm audit - Node.js Package Vulnerability Scanning
+  # ---------------------------------------------------------------------------
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-npm-audit }}
+    timeout-minutes: 10
+    outputs:
+      status: ${{ steps.audit.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if Node.js project
+        id: check
+        run: |
+          if [ -f "package.json" ]; then
+            echo "applicable=true" >> $GITHUB_OUTPUT
+          else
+            echo "applicable=false" >> $GITHUB_OUTPUT
+            echo "::notice::No package.json found - skipping npm audit"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: steps.check.outputs.applicable == 'true'
+        run: npm ci || npm install
+
+      - name: Run npm audit
+        id: audit
+        if: steps.check.outputs.applicable == 'true'
+        run: |
+          echo "## npm audit results" >> $GITHUB_STEP_SUMMARY
+          npm audit --audit-level=${{ inputs.npm-audit-level }} 2>&1 | tee audit-results.txt
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "::warning::npm audit found vulnerabilities at ${{ inputs.npm-audit-level }} level or above"
+            if [ "${{ inputs.fail-on-findings }}" = "true" ]; then
+              exit 1
+            fi
+          else
+            echo "::notice::npm audit passed - no vulnerabilities at ${{ inputs.npm-audit-level }} level or above"
+          fi
+        continue-on-error: ${{ !inputs.fail-on-findings }}
+
+      - name: Upload audit results
+        if: steps.check.outputs.applicable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-results
+          path: audit-results.txt
+          retention-days: ${{ inputs.artifact-retention }}
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Snyk - Security Vulnerability Scanner
+  # ---------------------------------------------------------------------------
+  snyk:
+    name: Snyk Security
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-snyk }}
+    timeout-minutes: 15
+    outputs:
+      status: ${{ steps.snyk.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if Node.js project
+        id: check-node
+        run: |
+          if [ -f "package.json" ]; then
+            echo "is_node=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_node=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if Python project
+        id: check-python
+        run: |
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then
+            echo "is_python=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_python=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if Go project
+        id: check-go
+        run: |
+          if [ -f "go.mod" ]; then
+            echo "is_go=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_go=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check-node.outputs.is_node == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install Node.js dependencies
+        if: steps.check-node.outputs.is_node == 'true'
+        run: npm ci || npm install
+
+      - name: Run Snyk for Node.js
+        id: snyk
+        if: steps.check-node.outputs.is_node == 'true'
+        uses: snyk/actions/node@master
+        continue-on-error: ${{ !inputs.fail-on-findings }}
+        env:
+          SNYK_TOKEN: ${{ secrets.snyk-token }}
+        with:
+          args: --severity-threshold=${{ inputs.snyk-severity }}
+
+      - name: Run Snyk for Python
+        if: steps.check-python.outputs.is_python == 'true' && steps.check-node.outputs.is_node != 'true'
+        uses: snyk/actions/python@master
+        continue-on-error: ${{ !inputs.fail-on-findings }}
+        env:
+          SNYK_TOKEN: ${{ secrets.snyk-token }}
+        with:
+          args: --severity-threshold=${{ inputs.snyk-severity }}
+
+      - name: Run Snyk for Go
+        if: steps.check-go.outputs.is_go == 'true' && steps.check-node.outputs.is_node != 'true' && steps.check-python.outputs.is_python != 'true'
+        uses: snyk/actions/golang@master
+        continue-on-error: ${{ !inputs.fail-on-findings }}
+        env:
+          SNYK_TOKEN: ${{ secrets.snyk-token }}
+        with:
+          args: --severity-threshold=${{ inputs.snyk-severity }}
+
+  # ---------------------------------------------------------------------------
+  # CodeQL - GitHub Code Scanning
+  # ---------------------------------------------------------------------------
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-codeql }}
+    timeout-minutes: 30
+    outputs:
+      status: ${{ steps.analyze.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect languages
+        id: detect
+        run: |
+          LANGUAGES=""
+          INPUT_LANGS="${{ inputs.codeql-languages }}"
+
+          # Check for each language in input and verify files exist
+          if echo "$INPUT_LANGS" | grep -qi "javascript\|typescript"; then
+            if [ -f "package.json" ] || find . -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" 2>/dev/null | head -1 | grep -q .; then
+              LANGUAGES="javascript-typescript"
+            fi
+          fi
+
+          if echo "$INPUT_LANGS" | grep -qi "python"; then
+            if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || find . -name "*.py" 2>/dev/null | head -1 | grep -q .; then
+              if [ -n "$LANGUAGES" ]; then LANGUAGES="$LANGUAGES,"; fi
+              LANGUAGES="${LANGUAGES}python"
+            fi
+          fi
+
+          if echo "$INPUT_LANGS" | grep -qi "go"; then
+            if [ -f "go.mod" ] || find . -name "*.go" 2>/dev/null | head -1 | grep -q .; then
+              if [ -n "$LANGUAGES" ]; then LANGUAGES="$LANGUAGES,"; fi
+              LANGUAGES="${LANGUAGES}go"
+            fi
+          fi
+
+          if [ -z "$LANGUAGES" ]; then
+            echo "::notice::No supported languages detected for CodeQL analysis"
+            echo "languages=" >> $GITHUB_OUTPUT
+          else
+            echo "languages=$LANGUAGES" >> $GITHUB_OUTPUT
+            echo "::notice::CodeQL will analyze: $LANGUAGES"
+          fi
+
+      - name: Initialize CodeQL
+        if: steps.detect.outputs.languages != ''
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ steps.detect.outputs.languages }}
+
+      - name: Autobuild
+        if: steps.detect.outputs.languages != ''
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        id: analyze
+        if: steps.detect.outputs.languages != ''
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ steps.detect.outputs.languages }}"
+
+  # ---------------------------------------------------------------------------
+  # Dependency Check - Outdated Package Detection
+  # ---------------------------------------------------------------------------
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run-dependency-check }}
+    timeout-minutes: 10
+    outputs:
+      status: ${{ steps.check.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if Node.js project
+        id: check-node
+        run: |
+          if [ -f "package.json" ]; then
+            echo "is_node=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_node=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if Python project
+        id: check-python
+        run: |
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; then
+            echo "is_python=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_python=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if Go project
+        id: check-go
+        run: |
+          if [ -f "go.mod" ]; then
+            echo "is_go=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_go=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check-node.outputs.is_node == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install Node.js dependencies
+        if: steps.check-node.outputs.is_node == 'true'
+        run: npm ci || npm install
+
+      - name: Check Node.js outdated packages
+        id: check
+        if: steps.check-node.outputs.is_node == 'true'
+        run: |
+          echo "## Outdated Dependencies Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check for custom dependency check script
+          if [ -f "scripts/check-deps.mjs" ]; then
+            node scripts/check-deps.mjs | tee deps-report.txt
+          elif [ -f "scripts/check-deps.js" ]; then
+            node scripts/check-deps.js | tee deps-report.txt
+          else
+            # Use npm outdated
+            echo "### npm outdated" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            npm outdated 2>&1 | tee deps-report.txt || true
+            cat deps-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Count major updates (potential breaking changes)
+          MAJOR_UPDATES=$(npm outdated --json 2>/dev/null | jq 'to_entries | map(select(.value.current != .value.wanted and .value.current != .value.latest)) | length' 2>/dev/null || echo "0")
+          if [ "$MAJOR_UPDATES" -gt 0 ]; then
+            echo "::warning::Found $MAJOR_UPDATES packages with potential major updates"
+          fi
+        continue-on-error: true
+
+      - name: Check Python outdated packages
+        if: steps.check-python.outputs.is_python == 'true'
+        run: |
+          pip install pip-outdated 2>/dev/null || true
+          echo "### Python outdated packages" >> $GITHUB_STEP_SUMMARY
+          pip list --outdated 2>&1 | tee -a deps-report.txt || true
+        continue-on-error: true
+
+      - name: Check Go outdated modules
+        if: steps.check-go.outputs.is_go == 'true'
+        run: |
+          echo "### Go module updates" >> $GITHUB_STEP_SUMMARY
+          go list -m -u all 2>&1 | grep '\[' | tee -a deps-report.txt || true
+        continue-on-error: true
+
+      - name: Upload dependency report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-report
+          path: deps-report.txt
+          retention-days: ${{ inputs.artifact-retention }}
           if-no-files-found: ignore
