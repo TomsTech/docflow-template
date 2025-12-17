@@ -232,13 +232,16 @@ jobs:
               echo "path=html-report" >> $GITHUB_OUTPUT
             elif [ -f "coverage/coverage-summary.json" ]; then
               # Create a simple HTML report
-              cat > test-report.html << 'HTMLEOF'
+              REPORT_TITLE="${{ inputs.report-title }}"
+              COVERAGE_PCT="${{ steps.coverage.outputs.coverage }}"
+              GENERATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+              cat > test-report.html << HTMLEOF
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${{ inputs.report-title }}</title>
+  <title>${REPORT_TITLE}</title>
   <style>
     :root { --bg: #0a0a0a; --surface: #141414; --border: #2a2a2a; --text: #fafafa; --accent: #22c55e; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -253,12 +256,12 @@ jobs:
 </head>
 <body>
   <div class="container">
-    <h1>${{ inputs.report-title }}</h1>
+    <h1>${REPORT_TITLE}</h1>
     <div class="card">
-      <div class="stat">${{ steps.coverage.outputs.coverage }}%</div>
+      <div class="stat">${COVERAGE_PCT}%</div>
       <div class="label">Code Coverage</div>
     </div>
-    <div class="meta">Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")</div>
+    <div class="meta">Generated: ${GENERATED_AT}</div>
   </div>
 </body>
 </html>
