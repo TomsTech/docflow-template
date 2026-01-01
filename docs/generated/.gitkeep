@@ -1,2 +1,3 @@
-# This file ensures the generated docs folder exists in version control
-# Auto-generated documentation will be placed here by the docflow-generate-docs workflow
+# Placeholder to ensure docs/generated directory exists
+# DocFlow will populate this directory automatically
+
